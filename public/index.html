@@ -10,556 +10,242 @@
       --bg: #0f1117;
       --surface: #1a1d27;
       --surface2: #242736;
+      --surface3: #2c3045;
       --border: #2e3347;
       --accent: #00d4aa;
       --accent2: #4f8ef7;
       --warn: #f5a623;
       --danger: #e74c3c;
       --success: #2ecc71;
+      --purple: #9b59b6;
       --text: #e8eaf2;
       --text-dim: #8b90a8;
       --font: 'Segoe UI', system-ui, -apple-system, sans-serif;
       --mono: 'Cascadia Code', 'Fira Code', 'Consolas', monospace;
+      --radius: 10px;
     }
 
     * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: var(--font); background: var(--bg); color: var(--text); min-height: 100vh; display: flex; flex-direction: column; }
 
-    body {
-      font-family: var(--font);
-      background: var(--bg);
-      color: var(--text);
-      min-height: 100vh;
-      display: flex;
-      flex-direction: column;
-    }
-
-    /* ---- LOGIN ---- */
-    #login-screen {
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      min-height: 100vh;
-      background: radial-gradient(ellipse at 60% 30%, #1a2a4a 0%, var(--bg) 70%);
-    }
-
-    .login-card {
-      background: var(--surface);
-      border: 1px solid var(--border);
-      border-radius: 16px;
-      padding: 48px;
-      width: 380px;
-      text-align: center;
-    }
-
-    .login-card .logo {
-      font-size: 48px;
-      margin-bottom: 16px;
-    }
-
-    .login-card h1 {
-      font-size: 1.5rem;
-      color: var(--accent);
-      margin-bottom: 8px;
-    }
-
-    .login-card p {
-      color: var(--text-dim);
-      margin-bottom: 32px;
-      font-size: 0.9rem;
-    }
-
-    .login-card input {
-      width: 100%;
-      padding: 12px 16px;
-      background: var(--surface2);
-      border: 1px solid var(--border);
-      border-radius: 8px;
-      color: var(--text);
-      font-size: 1rem;
-      margin-bottom: 16px;
-      outline: none;
-      transition: border-color 0.2s;
-    }
-
+    /* ── LOGIN ── */
+    #login-screen { display: flex; align-items: center; justify-content: center; min-height: 100vh; background: radial-gradient(ellipse at 60% 30%, #1a2a4a 0%, var(--bg) 70%); }
+    .login-card { background: var(--surface); border: 1px solid var(--border); border-radius: 16px; padding: 48px; width: 380px; text-align: center; }
+    .login-card .logo { font-size: 48px; margin-bottom: 16px; }
+    .login-card h1 { font-size: 1.5rem; color: var(--accent); margin-bottom: 8px; }
+    .login-card p { color: var(--text-dim); margin-bottom: 32px; font-size: 0.9rem; }
+    .login-card input { width: 100%; padding: 12px 16px; background: var(--surface2); border: 1px solid var(--border); border-radius: 8px; color: var(--text); font-size: 1rem; margin-bottom: 16px; outline: none; transition: border-color .2s; }
     .login-card input:focus { border-color: var(--accent); }
+    .login-error { color: var(--danger); font-size: .85rem; margin-bottom: 12px; min-height: 20px; }
 
-    .login-error {
-      color: var(--danger);
-      font-size: 0.85rem;
-      margin-bottom: 12px;
-      min-height: 20px;
-    }
-
-    /* ---- APP SHELL ---- */
+    /* ── APP SHELL ── */
     #app { display: none; flex-direction: column; min-height: 100vh; }
-
-    header {
-      background: var(--surface);
-      border-bottom: 1px solid var(--border);
-      padding: 0 24px;
-      height: 60px;
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      position: sticky;
-      top: 0;
-      z-index: 100;
-    }
-
-    .header-brand {
-      display: flex;
-      align-items: center;
-      gap: 12px;
-      font-size: 1.1rem;
-      font-weight: 600;
-      color: var(--accent);
-    }
-
-    .header-brand span { font-size: 22px; }
-
+    header { background: var(--surface); border-bottom: 1px solid var(--border); padding: 0 24px; height: 60px; display: flex; align-items: center; justify-content: space-between; position: sticky; top: 0; z-index: 100; }
+    .header-brand { display: flex; align-items: center; gap: 12px; font-size: 1.1rem; font-weight: 600; color: var(--accent); }
     .header-actions { display: flex; gap: 10px; align-items: center; }
+    .main-layout { display: flex; flex: 1; overflow: hidden; }
 
-    .main-layout {
-      display: flex;
-      flex: 1;
-      overflow: hidden;
-    }
-
-    /* ---- SIDEBAR ---- */
-    aside {
-      width: 260px;
-      background: var(--surface);
-      border-right: 1px solid var(--border);
-      display: flex;
-      flex-direction: column;
-      overflow-y: auto;
-    }
-
-    .sidebar-header {
-      padding: 16px 16px 8px;
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-    }
-
-    .sidebar-header h3 {
-      font-size: 0.75rem;
-      text-transform: uppercase;
-      letter-spacing: 1px;
-      color: var(--text-dim);
-    }
-
+    /* ── SIDEBAR ── */
+    aside { width: 260px; background: var(--surface); border-right: 1px solid var(--border); display: flex; flex-direction: column; overflow-y: auto; }
+    .sidebar-section { padding: 16px 16px 8px; }
+    .sidebar-section h3 { font-size: .75rem; text-transform: uppercase; letter-spacing: 1px; color: var(--text-dim); }
     .agent-list { padding: 0 8px 8px; }
-
-    .agent-item {
-      padding: 10px 12px;
-      border-radius: 8px;
-      cursor: pointer;
-      display: flex;
-      align-items: center;
-      gap: 10px;
-      margin-bottom: 4px;
-      transition: background 0.15s;
-    }
-
+    .agent-item { padding: 10px 12px; border-radius: 8px; cursor: pointer; display: flex; align-items: center; gap: 10px; margin-bottom: 4px; transition: background .15s; }
     .agent-item:hover { background: var(--surface2); }
-    .agent-item.active { background: rgba(0, 212, 170, 0.12); border: 1px solid rgba(0, 212, 170, 0.25); }
-
-    .agent-dot {
-      width: 8px;
-      height: 8px;
-      border-radius: 50%;
-      background: var(--text-dim);
-      flex-shrink: 0;
-    }
-
+    .agent-item.active { background: rgba(0,212,170,.12); border: 1px solid rgba(0,212,170,.25); }
+    .agent-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--text-dim); flex-shrink: 0; }
     .agent-dot.online { background: var(--success); box-shadow: 0 0 6px var(--success); }
     .agent-dot.offline { background: var(--danger); }
-
     .agent-item-info { flex: 1; min-width: 0; }
-    .agent-item-name { font-size: 0.9rem; font-weight: 500; truncate; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-    .agent-item-host { font-size: 0.75rem; color: var(--text-dim); }
+    .agent-item-name { font-size: .9rem; font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .agent-item-host { font-size: .75rem; color: var(--text-dim); }
 
-    /* ---- MAIN CONTENT ---- */
-    main {
-      flex: 1;
-      overflow-y: auto;
-      padding: 24px;
-    }
-
-    .welcome-screen {
-      display: flex;
-      flex-direction: column;
-      align-items: center;
-      justify-content: center;
-      height: 100%;
-      gap: 16px;
-      color: var(--text-dim);
-    }
-
+    /* ── MAIN ── */
+    main { flex: 1; overflow-y: auto; padding: 24px; }
+    .welcome-screen { display: flex; flex-direction: column; align-items: center; justify-content: center; height: 100%; gap: 16px; color: var(--text-dim); }
     .welcome-screen .icon { font-size: 64px; }
     .welcome-screen h2 { color: var(--text); font-size: 1.4rem; }
 
-    /* ---- AGENT PANEL ---- */
-    .agent-panel { display: none; flex-direction: column; gap: 24px; }
+    /* ── PANEL ── */
+    .agent-panel { display: none; flex-direction: column; gap: 20px; }
     .agent-panel.visible { display: flex; }
-
-    .panel-header {
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      gap: 16px;
-      flex-wrap: wrap;
-    }
-
+    .panel-header { display: flex; align-items: center; justify-content: space-between; gap: 16px; flex-wrap: wrap; }
     .panel-title h2 { font-size: 1.3rem; }
-    .panel-title p { color: var(--text-dim); font-size: 0.85rem; margin-top: 4px; }
+    .panel-title p { color: var(--text-dim); font-size: .85rem; margin-top: 4px; }
+    .action-bar { display: flex; gap: 8px; flex-wrap: wrap; }
 
-    .action-bar {
-      display: flex;
-      gap: 10px;
-      flex-wrap: wrap;
-    }
-
-    /* ---- TABS ---- */
-    .tabs {
-      display: flex;
-      gap: 4px;
-      border-bottom: 1px solid var(--border);
-      padding-bottom: 0;
-    }
-
-    .tab-btn {
-      padding: 10px 18px;
-      background: none;
-      border: none;
-      color: var(--text-dim);
-      cursor: pointer;
-      font-size: 0.9rem;
-      border-bottom: 2px solid transparent;
-      margin-bottom: -1px;
-      transition: all 0.15s;
-    }
-
+    /* ── TABS ── */
+    .tabs { display: flex; gap: 4px; border-bottom: 1px solid var(--border); }
+    .tab-btn { padding: 10px 18px; background: none; border: none; color: var(--text-dim); cursor: pointer; font-size: .88rem; border-bottom: 2px solid transparent; margin-bottom: -1px; transition: all .15s; white-space: nowrap; }
     .tab-btn:hover { color: var(--text); }
     .tab-btn.active { color: var(--accent); border-bottom-color: var(--accent); }
-
-    .tab-content { display: none; }
+    .tab-content { display: none; padding-top: 20px; }
     .tab-content.active { display: block; }
 
-    /* ---- CONFIGS LIST ---- */
-    .config-list { display: flex; flex-direction: column; gap: 8px; margin-bottom: 16px; }
+    /* ── SECTION HEADER ── */
+    .section-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 14px; }
+    .section-title { font-size: .78rem; text-transform: uppercase; letter-spacing: 1px; color: var(--text-dim); }
 
-    .config-item {
-      background: var(--surface);
-      border: 1px solid var(--border);
-      border-radius: 8px;
-      padding: 12px 16px;
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      gap: 12px;
-      cursor: pointer;
-      transition: border-color 0.15s;
-    }
+    /* ── CARDS / LISTS ── */
+    .card-list { display: flex; flex-direction: column; gap: 8px; margin-bottom: 16px; }
+    .card-item { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 14px 16px; display: flex; align-items: center; justify-content: space-between; gap: 12px; transition: border-color .15s; }
+    .card-item:hover { border-color: var(--accent2); }
+    .card-item.selected { border-color: var(--accent); background: rgba(0,212,170,.05); }
+    .card-item-name { font-family: var(--mono); font-size: .9rem; }
+    .card-item-meta { font-size: .75rem; color: var(--text-dim); margin-top: 3px; }
+    .card-item-actions { display: flex; gap: 6px; flex-shrink: 0; }
 
-    .config-item:hover { border-color: var(--accent2); }
-    .config-item.selected { border-color: var(--accent); background: rgba(0, 212, 170, 0.05); }
+    /* ── VISUAL BUILDER ── */
+    .sites-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 16px; margin-bottom: 20px; }
+    .site-card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 18px; display: flex; flex-direction: column; gap: 12px; transition: border-color .15s, transform .15s; cursor: pointer; }
+    .site-card:hover { border-color: var(--accent2); transform: translateY(-1px); }
+    .site-card-header { display: flex; align-items: flex-start; justify-content: space-between; gap: 8px; }
+    .site-card-icon { font-size: 24px; }
+    .site-card-title { font-size: 1rem; font-weight: 600; }
+    .site-card-host { font-size: .82rem; color: var(--accent); font-family: var(--mono); }
+    .site-card-badges { display: flex; gap: 6px; flex-wrap: wrap; }
+    .site-card-actions { display: flex; gap: 6px; }
 
-    .config-item-name {
-      font-family: var(--mono);
-      font-size: 0.9rem;
-      flex: 1;
-    }
+    /* ── CERTIFICATES ── */
+    .cert-card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 16px; display: flex; align-items: center; gap: 14px; }
+    .cert-card:hover { border-color: var(--accent2); }
+    .cert-icon { font-size: 28px; flex-shrink: 0; }
+    .cert-info { flex: 1; min-width: 0; }
+    .cert-label { font-size: .95rem; font-weight: 600; }
+    .cert-paths { font-size: .76rem; color: var(--text-dim); font-family: var(--mono); margin-top: 4px; }
+    .cert-actions { display: flex; gap: 6px; flex-shrink: 0; }
 
-    .config-item-meta { font-size: 0.75rem; color: var(--text-dim); }
+    /* ── EDITOR ── */
+    .editor-wrap { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); overflow: hidden; }
+    .editor-toolbar { background: var(--surface2); border-bottom: 1px solid var(--border); padding: 10px 16px; display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+    .editor-filename { font-family: var(--mono); font-size: .85rem; color: var(--accent); }
+    textarea.code-editor { width: 100%; min-height: 400px; background: var(--surface); color: var(--text); border: none; padding: 16px; font-family: var(--mono); font-size: .88rem; line-height: 1.6; resize: vertical; outline: none; tab-size: 4; }
 
-    /* ---- EDITOR ---- */
-    .editor-wrap {
-      background: var(--surface);
-      border: 1px solid var(--border);
-      border-radius: 10px;
-      overflow: hidden;
-    }
+    /* ── TERMINAL ── */
+    .terminal-wrap { background: #080c14; border: 1px solid var(--border); border-radius: var(--radius); overflow: hidden; }
+    .terminal-bar { background: #0e1320; border-bottom: 1px solid var(--border); padding: 8px 16px; display: flex; align-items: center; gap: 8px; }
+    .t-dot { width: 12px; height: 12px; border-radius: 50%; }
+    .t-red { background: #ff5f56; } .t-yellow { background: #ffbd2e; } .t-green { background: #27c93f; }
+    .terminal-title { font-size: .8rem; color: var(--text-dim); margin-left: 4px; }
+    .log-output { font-family: var(--mono); font-size: .82rem; line-height: 1.7; color: #c8f0d0; padding: 16px; min-height: 200px; max-height: 400px; overflow-y: auto; white-space: pre-wrap; word-break: break-all; }
 
-    .editor-toolbar {
-      background: var(--surface2);
-      border-bottom: 1px solid var(--border);
-      padding: 10px 16px;
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      gap: 12px;
-    }
+    /* ── STATUS ── */
+    .status-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 14px; margin-bottom: 20px; }
+    .stat-card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 18px; }
+    .stat-label { font-size: .75rem; color: var(--text-dim); text-transform: uppercase; letter-spacing: .8px; margin-bottom: 8px; }
+    .stat-value { font-size: 1.4rem; font-weight: 700; color: var(--accent); }
 
-    .editor-filename {
-      font-family: var(--mono);
-      font-size: 0.85rem;
-      color: var(--accent);
-    }
-
-    textarea.code-editor {
-      width: 100%;
-      min-height: 420px;
-      background: var(--surface);
-      color: var(--text);
-      border: none;
-      padding: 16px;
-      font-family: var(--mono);
-      font-size: 0.88rem;
-      line-height: 1.6;
-      resize: vertical;
-      outline: none;
-      tab-size: 4;
-    }
-
-    /* ---- TERMINAL ---- */
-    .terminal-wrap {
-      background: #080c14;
-      border: 1px solid var(--border);
-      border-radius: 10px;
-      overflow: hidden;
-    }
-
-    .terminal-bar {
-      background: #0e1320;
-      border-bottom: 1px solid var(--border);
-      padding: 8px 16px;
-      display: flex;
-      align-items: center;
-      gap: 8px;
-    }
-
-    .terminal-dot { width: 12px; height: 12px; border-radius: 50%; }
-    .t-red { background: #ff5f56; }
-    .t-yellow { background: #ffbd2e; }
-    .t-green { background: #27c93f; }
-
-    .terminal-title { font-size: 0.8rem; color: var(--text-dim); margin-left: 4px; }
-
-    #log-output {
-      font-family: var(--mono);
-      font-size: 0.82rem;
-      line-height: 1.7;
-      color: #c8f0d0;
-      padding: 16px;
-      min-height: 200px;
-      max-height: 400px;
-      overflow-y: auto;
-      white-space: pre-wrap;
-      word-break: break-all;
-    }
-
-    /* ---- BUTTONS ---- */
-    button {
-      cursor: pointer;
-      border: none;
-      border-radius: 8px;
-      font-family: var(--font);
-      font-size: 0.85rem;
-      font-weight: 500;
-      padding: 8px 16px;
-      transition: all 0.15s;
-      display: inline-flex;
-      align-items: center;
-      gap: 6px;
-    }
-
-    .btn-primary {
-      background: var(--accent);
-      color: #0f1117;
-    }
+    /* ── BUTTONS ── */
+    button { cursor: pointer; border: none; border-radius: 8px; font-family: var(--font); font-size: .85rem; font-weight: 500; padding: 8px 16px; transition: all .15s; display: inline-flex; align-items: center; gap: 6px; }
+    .btn-primary   { background: var(--accent); color: #0f1117; }
     .btn-primary:hover { background: #00f0c2; transform: translateY(-1px); }
-
-    .btn-secondary {
-      background: var(--surface2);
-      color: var(--text);
-      border: 1px solid var(--border);
-    }
+    .btn-secondary { background: var(--surface2); color: var(--text); border: 1px solid var(--border); }
     .btn-secondary:hover { background: var(--border); }
+    .btn-danger    { background: rgba(231,76,60,.15); color: var(--danger); border: 1px solid rgba(231,76,60,.3); }
+    .btn-danger:hover { background: rgba(231,76,60,.25); }
+    .btn-warn      { background: rgba(245,166,35,.15); color: var(--warn); border: 1px solid rgba(245,166,35,.3); }
+    .btn-warn:hover { background: rgba(245,166,35,.25); }
+    .btn-success   { background: rgba(46,204,113,.15); color: var(--success); border: 1px solid rgba(46,204,113,.3); }
+    .btn-success:hover { background: rgba(46,204,113,.25); }
+    .btn-purple    { background: rgba(155,89,182,.15); color: var(--purple); border: 1px solid rgba(155,89,182,.3); }
+    .btn-purple:hover { background: rgba(155,89,182,.25); }
+    .btn-sm { padding: 5px 10px; font-size: .78rem; }
+    .btn-xs { padding: 3px 8px; font-size: .72rem; }
+    button:disabled { opacity: .5; cursor: not-allowed; transform: none !important; }
 
-    .btn-danger {
-      background: rgba(231,76,60,0.15);
-      color: var(--danger);
-      border: 1px solid rgba(231,76,60,0.3);
-    }
-    .btn-danger:hover { background: rgba(231,76,60,0.25); }
+    /* ── BADGES ── */
+    .badge { display: inline-flex; align-items: center; gap: 5px; padding: 2px 9px; border-radius: 20px; font-size: .72rem; font-weight: 600; }
+    .badge-success { background: rgba(46,204,113,.15); color: var(--success); border: 1px solid rgba(46,204,113,.3); }
+    .badge-danger  { background: rgba(231,76,60,.15); color: var(--danger); border: 1px solid rgba(231,76,60,.3); }
+    .badge-warn    { background: rgba(245,166,35,.15); color: var(--warn); border: 1px solid rgba(245,166,35,.3); }
+    .badge-info    { background: rgba(79,142,247,.15); color: var(--accent2); border: 1px solid rgba(79,142,247,.3); }
+    .badge-purple  { background: rgba(155,89,182,.15); color: var(--purple); border: 1px solid rgba(155,89,182,.3); }
+    .badge-accent  { background: rgba(0,212,170,.15); color: var(--accent); border: 1px solid rgba(0,212,170,.3); }
 
-    .btn-warn {
-      background: rgba(245,166,35,0.15);
-      color: var(--warn);
-      border: 1px solid rgba(245,166,35,0.3);
-    }
-    .btn-warn:hover { background: rgba(245,166,35,0.25); }
-
-    .btn-success {
-      background: rgba(46,204,113,0.15);
-      color: var(--success);
-      border: 1px solid rgba(46,204,113,0.3);
-    }
-    .btn-success:hover { background: rgba(46,204,113,0.25); }
-
-    .btn-sm { padding: 5px 10px; font-size: 0.78rem; }
-
-    button:disabled { opacity: 0.5; cursor: not-allowed; transform: none !important; }
-
-    /* ---- MODALS ---- */
-    .modal-backdrop {
-      display: none;
-      position: fixed;
-      inset: 0;
-      background: rgba(0,0,0,0.6);
-      backdrop-filter: blur(4px);
-      z-index: 200;
-      align-items: center;
-      justify-content: center;
-    }
-
+    /* ── MODALS ── */
+    .modal-backdrop { display: none; position: fixed; inset: 0; background: rgba(0,0,0,.65); backdrop-filter: blur(4px); z-index: 200; align-items: center; justify-content: center; overflow-y: auto; padding: 20px; }
     .modal-backdrop.open { display: flex; }
-
-    .modal {
-      background: var(--surface);
-      border: 1px solid var(--border);
-      border-radius: 16px;
-      padding: 32px;
-      width: 480px;
-      max-width: 95vw;
-    }
-
-    .modal h3 {
-      font-size: 1.1rem;
-      margin-bottom: 24px;
-      color: var(--accent);
-    }
-
-    .form-group { margin-bottom: 16px; }
-    .form-group label { display: block; font-size: 0.82rem; color: var(--text-dim); margin-bottom: 6px; }
-
-    .form-group input,
-    .form-group textarea,
-    .form-group select {
-      width: 100%;
-      padding: 10px 14px;
-      background: var(--surface2);
-      border: 1px solid var(--border);
-      border-radius: 8px;
-      color: var(--text);
-      font-size: 0.9rem;
-      outline: none;
-      transition: border-color 0.2s;
-      font-family: inherit;
-    }
-
-    .form-group input:focus,
-    .form-group textarea:focus { border-color: var(--accent); }
-
-    .form-row { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
-
+    .modal { background: var(--surface); border: 1px solid var(--border); border-radius: 16px; padding: 32px; width: 560px; max-width: 100%; }
+    .modal-wide { width: 740px; }
+    .modal h3 { font-size: 1.1rem; margin-bottom: 24px; color: var(--accent); display: flex; align-items: center; gap: 8px; }
     .modal-actions { display: flex; gap: 10px; justify-content: flex-end; margin-top: 24px; }
 
-    /* ---- STATUS BADGE ---- */
-    .badge {
-      display: inline-flex;
-      align-items: center;
-      gap: 5px;
-      padding: 3px 10px;
-      border-radius: 20px;
-      font-size: 0.75rem;
-      font-weight: 600;
+    /* ── FORMS ── */
+    .form-group { margin-bottom: 14px; }
+    .form-group label { display: flex; align-items: center; gap: 6px; font-size: .82rem; color: var(--text-dim); margin-bottom: 6px; }
+    .form-group label .req { color: var(--accent); }
+    .form-group input, .form-group textarea, .form-group select {
+      width: 100%; padding: 10px 14px; background: var(--surface2); border: 1px solid var(--border);
+      border-radius: 8px; color: var(--text); font-size: .9rem; outline: none; transition: border-color .2s; font-family: inherit;
     }
+    .form-group input:focus, .form-group textarea:focus, .form-group select:focus { border-color: var(--accent); }
+    .form-group select option { background: var(--surface2); }
+    .form-row { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+    .form-row-3 { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 12px; }
+    .form-hint { font-size: .75rem; color: var(--text-dim); margin-top: 4px; }
 
-    .badge-success { background: rgba(46,204,113,0.15); color: var(--success); border: 1px solid rgba(46,204,113,0.3); }
-    .badge-danger  { background: rgba(231,76,60,0.15); color: var(--danger); border: 1px solid rgba(231,76,60,0.3); }
-    .badge-warn    { background: rgba(245,166,35,0.15); color: var(--warn); border: 1px solid rgba(245,166,35,0.3); }
-    .badge-info    { background: rgba(79,142,247,0.15); color: var(--accent2); border: 1px solid rgba(79,142,247,0.3); }
+    /* ── TOGGLE ── */
+    .toggle-group { display: flex; align-items: center; justify-content: space-between; padding: 10px 0; }
+    .toggle-group label { font-size: .9rem; cursor: pointer; }
+    .toggle { position: relative; display: inline-block; width: 44px; height: 24px; }
+    .toggle input { opacity: 0; width: 0; height: 0; }
+    .toggle-slider { position: absolute; cursor: pointer; inset: 0; background: var(--border); border-radius: 24px; transition: .3s; }
+    .toggle-slider:before { position: absolute; content: ''; height: 18px; width: 18px; left: 3px; bottom: 3px; background: white; border-radius: 50%; transition: .3s; }
+    input:checked + .toggle-slider { background: var(--accent); }
+    input:checked + .toggle-slider:before { transform: translateX(20px); }
 
-    /* ---- STATUS TAB ---- */
-    .status-grid {
-      display: grid;
-      grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
-      gap: 16px;
-      margin-bottom: 24px;
-    }
+    /* ── FILE UPLOAD ── */
+    .file-upload-area { border: 2px dashed var(--border); border-radius: var(--radius); padding: 20px; text-align: center; transition: border-color .2s; cursor: pointer; }
+    .file-upload-area:hover { border-color: var(--accent); }
+    .file-upload-area input[type="file"] { display: none; }
+    .file-upload-area .upload-icon { font-size: 32px; margin-bottom: 8px; }
+    .file-upload-area p { font-size: .85rem; color: var(--text-dim); }
+    .file-upload-area .file-chosen { font-size: .82rem; color: var(--accent); margin-top: 6px; font-family: var(--mono); }
 
-    .stat-card {
-      background: var(--surface);
-      border: 1px solid var(--border);
-      border-radius: 10px;
-      padding: 20px;
-    }
+    /* ── CERT SSL SECTION ── */
+    .ssl-section { background: var(--surface2); border: 1px solid var(--border); border-radius: var(--radius); padding: 16px; margin-top: 8px; }
+    .ssl-section h4 { font-size: .82rem; color: var(--accent); text-transform: uppercase; letter-spacing: .8px; margin-bottom: 14px; display: flex; align-items: center; gap: 6px; }
 
-    .stat-card .stat-label {
-      font-size: 0.78rem;
-      color: var(--text-dim);
-      text-transform: uppercase;
-      letter-spacing: 0.8px;
-      margin-bottom: 8px;
-    }
+    /* ── UPSTREAM BUILDER ── */
+    .upstream-list { display: flex; flex-direction: column; gap: 6px; margin-bottom: 8px; }
+    .upstream-item { display: flex; gap: 6px; align-items: center; }
+    .upstream-item input { flex: 1; }
 
-    .stat-card .stat-value {
-      font-size: 1.5rem;
-      font-weight: 700;
-      color: var(--accent);
-    }
+    /* ── PREVIEW PANE ── */
+    .preview-pane { background: #080c14; border: 1px solid var(--border); border-radius: var(--radius); padding: 16px; font-family: var(--mono); font-size: .82rem; color: #c8f0d0; white-space: pre-wrap; max-height: 320px; overflow-y: auto; margin-top: 12px; }
 
-    .stat-card .stat-sub { font-size: 0.8rem; color: var(--text-dim); margin-top: 4px; }
+    /* ── TOASTS ── */
+    #toast-container { position: fixed; bottom: 24px; right: 24px; z-index: 999; display: flex; flex-direction: column; gap: 8px; }
+    .toast { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 12px 20px; font-size: .87rem; animation: slideIn .2s ease; max-width: 360px; }
+    .toast.success { border-left: 3px solid var(--success); }
+    .toast.error   { border-left: 3px solid var(--danger); }
+    .toast.info    { border-left: 3px solid var(--accent2); }
+    @keyframes slideIn { from { opacity: 0; transform: translateX(40px); } to { opacity: 1; transform: translateX(0); } }
 
-    /* ---- SCROLLBAR ---- */
+    /* ── EMPTY STATE ── */
+    .empty-state { text-align: center; padding: 40px; color: var(--text-dim); }
+    .empty-state .icon { font-size: 36px; margin-bottom: 10px; }
+
+    /* ── MISC ── */
     ::-webkit-scrollbar { width: 6px; height: 6px; }
     ::-webkit-scrollbar-track { background: var(--surface); }
     ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
     ::-webkit-scrollbar-thumb:hover { background: var(--text-dim); }
-
-    /* ---- TOAST ---- */
-    #toast-container {
-      position: fixed;
-      bottom: 24px;
-      right: 24px;
-      z-index: 999;
-      display: flex;
-      flex-direction: column;
-      gap: 8px;
-    }
-
-    .toast {
-      background: var(--surface);
-      border: 1px solid var(--border);
-      border-radius: 8px;
-      padding: 12px 20px;
-      font-size: 0.87rem;
-      animation: slideIn 0.2s ease;
-      max-width: 360px;
-    }
-
-    .toast.success { border-left: 3px solid var(--success); }
-    .toast.error   { border-left: 3px solid var(--danger); }
-    .toast.info    { border-left: 3px solid var(--accent2); }
-
-    @keyframes slideIn {
-      from { opacity: 0; transform: translateX(40px); }
-      to   { opacity: 1; transform: translateX(0); }
-    }
-
-    .empty-state {
-      text-align: center;
-      padding: 40px;
-      color: var(--text-dim);
-    }
-
-    .empty-state .icon { font-size: 40px; margin-bottom: 12px; }
-
     .divider { border: none; border-top: 1px solid var(--border); margin: 8px 0; }
+    .text-dim { color: var(--text-dim); }
+    .mono { font-family: var(--mono); }
   </style>
 </head>
 <body>
 
-<!-- ================================================================ LOGIN -->
+<!-- ══════════════════════ LOGIN ══════════════════════ -->
 <div id="login-screen">
   <div class="login-card">
     <div class="logo">⚙️</div>
     <h1>Nginx Manager</h1>
     <p>ConnopNetworking — Nginx Config Control</p>
-    <input type="password" id="login-pass" placeholder="Admin password" onkeydown="if(event.key==='Enter')doLogin()" />
+    <input type="password" id="login-pass" placeholder="Admin password"
+      onkeydown="if(event.key==='Enter')doLogin()" />
     <div class="login-error" id="login-error"></div>
     <button class="btn-primary" style="width:100%;justify-content:center;padding:12px" onclick="doLogin()">
       🔐 Sign In
@@ -567,40 +253,31 @@
   </div>
 </div>
 
-<!-- ================================================================ APP -->
+<!-- ══════════════════════ APP ══════════════════════ -->
 <div id="app">
   <header>
-    <div class="header-brand">
-      <span>⚙️</span>
-      Nginx Manager
-    </div>
+    <div class="header-brand"><span>⚙️</span>Nginx Manager</div>
     <div class="header-actions">
-      <span style="font-size:0.8rem;color:var(--text-dim)" id="agent-count-label"></span>
+      <span style="font-size:.8rem;color:var(--text-dim)" id="agent-count-label"></span>
       <button class="btn-secondary btn-sm" onclick="openAddAgent()">＋ Add Server</button>
       <button class="btn-secondary btn-sm" onclick="doLogout()">🚪 Logout</button>
     </div>
   </header>
 
   <div class="main-layout">
-    <!-- Sidebar -->
     <aside>
-      <div class="sidebar-header">
-        <h3>Nginx Servers</h3>
-      </div>
+      <div class="sidebar-section"><h3>Nginx Servers</h3></div>
       <div class="agent-list" id="agent-list">
-        <div class="empty-state">
-          <div class="icon">🖥️</div>
-          <p>No servers yet.<br>Add your first nginx server.</p>
-        </div>
+        <div class="empty-state"><div class="icon">🖥️</div><p>No servers yet.</p></div>
       </div>
     </aside>
 
-    <!-- Main -->
     <main id="main-content">
+      <!-- Welcome -->
       <div class="welcome-screen" id="welcome">
         <div class="icon">🌐</div>
         <h2>Select a server</h2>
-        <p>Choose an nginx server from the sidebar to manage its configuration.</p>
+        <p>Choose an nginx server from the sidebar to manage it.</p>
         <button class="btn-primary" onclick="openAddAgent()" style="margin-top:8px">＋ Add nginx Server</button>
       </div>
 
@@ -612,93 +289,91 @@
             <p id="panel-agent-host">hostname</p>
           </div>
           <div class="action-bar">
-            <button class="btn-success btn-sm" id="btn-sync" onclick="doSync()">🔄 Sync Configs</button>
-            <button class="btn-warn btn-sm" id="btn-validate" onclick="doValidate()">✅ Validate</button>
-            <button class="btn-primary btn-sm" id="btn-reload" onclick="doReload()">↩ Reload nginx</button>
+            <button class="btn-success btn-sm" id="btn-sync"     onclick="doSync()">🔄 Sync</button>
+            <button class="btn-warn btn-sm"    id="btn-validate" onclick="doValidate()">✅ Validate</button>
+            <button class="btn-primary btn-sm" id="btn-reload"   onclick="doReload()">↩ Reload</button>
             <button class="btn-secondary btn-sm" id="btn-status" onclick="doStatus()">📊 Status</button>
-            <button class="btn-danger btn-sm" onclick="deleteCurrentAgent()">🗑 Remove</button>
+            <button class="btn-danger btn-sm"  onclick="deleteCurrentAgent()">🗑 Remove</button>
           </div>
         </div>
 
-        <!-- Tabs -->
         <div class="tabs">
-          <button class="tab-btn active" onclick="switchTab('configs')">📄 Configs</button>
-          <button class="tab-btn" onclick="switchTab('terminal')">🖥️ Terminal Log</button>
-          <button class="tab-btn" onclick="switchTab('status')">📊 Status</button>
+          <button class="tab-btn active"  data-tab="builder">🏗️ Visual Builder</button>
+          <button class="tab-btn"         data-tab="certs">🔐 Certificates</button>
+          <button class="tab-btn"         data-tab="configs">📄 Raw Configs</button>
+          <button class="tab-btn"         data-tab="terminal">🖥️ Log</button>
+          <button class="tab-btn"         data-tab="status">📊 Status</button>
         </div>
 
-        <!-- Configs tab -->
-        <div class="tab-content active" id="tab-configs">
-          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;margin-top:16px">
-            <h4 style="color:var(--text-dim);font-size:0.8rem;text-transform:uppercase;letter-spacing:1px">
-              Config Files
-            </h4>
+        <!-- ── VISUAL BUILDER TAB ── -->
+        <div class="tab-content active" id="tab-builder">
+          <div class="section-header">
+            <span class="section-title">Sites</span>
+            <button class="btn-primary btn-sm" onclick="openSiteModal()">＋ Add Site</button>
+          </div>
+          <div class="sites-grid" id="sites-grid"></div>
+        </div>
+
+        <!-- ── CERTIFICATES TAB ── -->
+        <div class="tab-content" id="tab-certs">
+          <div class="section-header">
+            <span class="section-title">Certificates</span>
             <div style="display:flex;gap:8px">
-              <button class="btn-secondary btn-sm" onclick="openNewConfig()">＋ New Config</button>
+              <button class="btn-secondary btn-sm" onclick="scanCerts()">🔍 Scan Server</button>
+              <button class="btn-purple btn-sm"    onclick="openAddRemoteCert()">🔗 Register Remote</button>
+              <button class="btn-primary btn-sm"   onclick="openUploadCert()">⬆ Upload Cert</button>
             </div>
           </div>
+          <div class="card-list" id="certs-list"></div>
+        </div>
 
-          <div class="config-list" id="config-list"></div>
-
-          <!-- Editor -->
+        <!-- ── RAW CONFIGS TAB ── -->
+        <div class="tab-content" id="tab-configs">
+          <div class="section-header">
+            <span class="section-title">Config Files</span>
+            <button class="btn-secondary btn-sm" onclick="openNewConfig()">＋ New Config</button>
+          </div>
+          <div class="card-list" id="config-list"></div>
           <div id="editor-section" style="display:none">
             <div class="editor-wrap">
               <div class="editor-toolbar">
                 <span class="editor-filename" id="editor-filename">untitled.conf</span>
                 <div style="display:flex;gap:8px">
                   <button class="btn-secondary btn-sm" onclick="closeEditor()">✕ Close</button>
-                  <button class="btn-primary btn-sm" onclick="saveConfig()">💾 Save</button>
-                  <button class="btn-success btn-sm" id="btn-push-file" onclick="pushCurrentFile()">📤 Push to Server</button>
+                  <button class="btn-primary btn-sm"   onclick="saveConfig()">💾 Save</button>
+                  <button class="btn-success btn-sm"   id="btn-push-file" onclick="pushCurrentFile()">📤 Push to Server</button>
                 </div>
               </div>
-              <textarea class="code-editor" id="code-editor" spellcheck="false"
-                placeholder="# nginx configuration..."></textarea>
+              <textarea class="code-editor" id="code-editor" spellcheck="false" placeholder="# nginx configuration..."></textarea>
             </div>
           </div>
         </div>
 
-        <!-- Terminal tab -->
+        <!-- ── LOG TAB ── -->
         <div class="tab-content" id="tab-terminal">
+          <div class="terminal-wrap">
+            <div class="terminal-bar">
+              <div class="t-dot t-red"></div><div class="t-dot t-yellow"></div><div class="t-dot t-green"></div>
+              <span class="terminal-title">Operation Log</span>
+              <button class="btn-secondary btn-sm" style="margin-left:auto" onclick="clearLog()">Clear</button>
+            </div>
+            <pre class="log-output" id="log-output">$ Waiting for operations...\n</pre>
+          </div>
+        </div>
+
+        <!-- ── STATUS TAB ── -->
+        <div class="tab-content" id="tab-status">
+          <div class="status-grid">
+            <div class="stat-card"><div class="stat-label">Status</div><div class="stat-value" id="stat-status">—</div></div>
+            <div class="stat-card"><div class="stat-label">Sites</div><div class="stat-value" id="stat-sites">—</div></div>
+            <div class="stat-card"><div class="stat-label">Certs</div><div class="stat-value" id="stat-certs-count">—</div></div>
+            <div class="stat-card"><div class="stat-label">Host</div><div class="stat-value" style="font-size:1rem" id="stat-host">—</div></div>
+          </div>
+          <button class="btn-primary btn-sm" onclick="doStatus()">🔍 Refresh Status</button>
           <div style="margin-top:16px">
             <div class="terminal-wrap">
-              <div class="terminal-bar">
-                <div class="terminal-dot t-red"></div>
-                <div class="terminal-dot t-yellow"></div>
-                <div class="terminal-dot t-green"></div>
-                <span class="terminal-title">Operation Log</span>
-                <button class="btn-secondary btn-sm" style="margin-left:auto" onclick="clearLog()">Clear</button>
-              </div>
-              <pre id="log-output">$ Waiting for operations...\n</pre>
-            </div>
-          </div>
-        </div>
-
-        <!-- Status tab -->
-        <div class="tab-content" id="tab-status">
-          <div style="margin-top:16px">
-            <div class="status-grid">
-              <div class="stat-card">
-                <div class="stat-label">Status</div>
-                <div class="stat-value" id="stat-status">—</div>
-              </div>
-              <div class="stat-card">
-                <div class="stat-label">Local Configs</div>
-                <div class="stat-value" id="stat-configs">—</div>
-              </div>
-              <div class="stat-card">
-                <div class="stat-label">Host</div>
-                <div class="stat-value" style="font-size:1rem" id="stat-host">—</div>
-              </div>
-            </div>
-            <button class="btn-primary" onclick="doStatus()">🔍 Refresh Status</button>
-            <div style="margin-top:16px">
-              <div class="terminal-wrap">
-                <div class="terminal-bar">
-                  <div class="terminal-dot t-green"></div>
-                  <span class="terminal-title">Status Output</span>
-                </div>
-                <pre id="status-output" style="font-family:var(--mono);font-size:0.82rem;color:#c8f0d0;padding:16px;min-height:120px;max-height:300px;overflow-y:auto;white-space:pre-wrap;word-break:break-all">$ Click "Refresh Status" to check nginx...\n</pre>
-              </div>
+              <div class="terminal-bar"><div class="t-dot t-green"></div><span class="terminal-title">Status Output</span></div>
+              <pre class="log-output" id="status-output">$ Click "Refresh Status" to check nginx...\n</pre>
             </div>
           </div>
         </div>
@@ -707,62 +382,234 @@
   </div>
 </div>
 
-<!-- ================================================================ MODALS -->
-<!-- Add/Edit Agent Modal -->
+<!-- ══════════════════════ MODALS ══════════════════════ -->
+
+<!-- Add/Edit Agent -->
 <div class="modal-backdrop" id="agent-modal">
   <div class="modal">
     <h3 id="agent-modal-title">➕ Add Nginx Server</h3>
     <div class="form-row">
-      <div class="form-group">
-        <label>Name *</label>
-        <input type="text" id="f-name" placeholder="nginx-lb-01" />
-      </div>
-      <div class="form-group">
-        <label>Host / IP *</label>
-        <input type="text" id="f-host" placeholder="172.16.40.51" />
-      </div>
+      <div class="form-group"><label>Name <span class="req">*</span></label><input type="text" id="f-name" placeholder="nginx-lb-01" /></div>
+      <div class="form-group"><label>Host / IP <span class="req">*</span></label><input type="text" id="f-host" placeholder="172.16.40.51" /></div>
     </div>
     <div class="form-row">
-      <div class="form-group">
-        <label>SSH User *</label>
-        <input type="text" id="f-user" placeholder="mconnop" />
-      </div>
-      <div class="form-group">
-        <label>SSH Port</label>
-        <input type="number" id="f-port" placeholder="22" value="22" />
-      </div>
+      <div class="form-group"><label>SSH User <span class="req">*</span></label><input type="text" id="f-user" placeholder="root" /></div>
+      <div class="form-group"><label>SSH Port</label><input type="number" id="f-port" value="22" /></div>
     </div>
-    <div class="form-group">
-      <label>SSH Password (leave blank if using key)</label>
-      <input type="password" id="f-pass" placeholder="password" />
-    </div>
-    <div class="form-group">
-      <label>SSH Key Path (on manager server)</label>
-      <input type="text" id="f-key" placeholder="/root/.ssh/id_rsa (optional)" />
-    </div>
-    <div class="form-group">
-      <label>Nginx Config Path</label>
-      <input type="text" id="f-cfg" placeholder="/etc/nginx" value="/etc/nginx" />
-    </div>
-    <div class="form-group">
-      <label>Description</label>
-      <input type="text" id="f-desc" placeholder="Load balancer — DMZ" />
-    </div>
+    <div class="form-group"><label>SSH Password</label><input type="password" id="f-pass" placeholder="password" /></div>
+    <div class="form-group"><label>SSH Key Path (on manager)</label><input type="text" id="f-key" placeholder="/root/.ssh/id_rsa (optional)" /></div>
+    <div class="form-group"><label>Nginx Config Path</label><input type="text" id="f-cfg" value="/etc/nginx" /></div>
+    <div class="form-group"><label>Description</label><input type="text" id="f-desc" placeholder="Primary load balancer" /></div>
     <div class="modal-actions">
       <button class="btn-secondary" onclick="closeAgentModal()">Cancel</button>
-      <button class="btn-primary" onclick="saveAgent()">💾 Save Server</button>
+      <button class="btn-primary"   onclick="saveAgent()">💾 Save Server</button>
     </div>
   </div>
 </div>
 
-<!-- New Config Modal -->
+<!-- ─── SITE BUILDER MODAL ─── -->
+<div class="modal-backdrop" id="site-modal">
+  <div class="modal modal-wide">
+    <h3 id="site-modal-title">🏗️ Add Site</h3>
+
+    <div class="form-row">
+      <div class="form-group"><label>Site Name <span class="req">*</span></label><input type="text" id="s-name" placeholder="My Website" oninput="previewConf()" /></div>
+      <div class="form-group">
+        <label>Type</label>
+        <select id="s-type" onchange="onTypeChange(); previewConf()">
+          <option value="proxy">🔀 Reverse Proxy</option>
+          <option value="static">📁 Static Site</option>
+          <option value="redirect">↩ Redirect</option>
+        </select>
+      </div>
+    </div>
+
+    <div class="form-row">
+      <div class="form-group"><label>Domain / Server Name</label><input type="text" id="s-servername" placeholder="example.com www.example.com" oninput="previewConf()" /></div>
+      <div class="form-group"><label>Listen Port</label><input type="number" id="s-port" value="80" oninput="previewConf()" /></div>
+    </div>
+
+    <!-- Proxy upstreams -->
+    <div id="s-proxy-section">
+      <div class="form-group">
+        <label>Backend Upstream(s)</label>
+        <div class="upstream-list" id="upstream-list"></div>
+        <button class="btn-secondary btn-sm" style="margin-top:6px" onclick="addUpstream()">＋ Add Backend</button>
+        <div class="form-hint">For multiple backends, nginx will load-balance between them.</div>
+      </div>
+      <div class="form-row">
+        <div class="form-group">
+          <label>Load Balance Method</label>
+          <select id="s-lbmethod" onchange="previewConf()">
+            <option value="round_robin">Round Robin (default)</option>
+            <option value="least_conn">Least Connections</option>
+            <option value="ip_hash">IP Hash</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label>Proxy Timeout (s)</label>
+          <input type="number" id="s-timeout" value="60" min="5" oninput="previewConf()" />
+        </div>
+      </div>
+    </div>
+
+    <!-- Static site -->
+    <div id="s-static-section" style="display:none">
+      <div class="form-group"><label>Document Root</label><input type="text" id="s-staticroot" value="/var/www/html" oninput="previewConf()" /></div>
+    </div>
+
+    <!-- Redirect -->
+    <div id="s-redirect-section" style="display:none">
+      <div class="form-group"><label>Redirect To</label><input type="text" id="s-redirectto" placeholder="https://example.com$request_uri" oninput="previewConf()" /></div>
+    </div>
+
+    <!-- SSL section -->
+    <div style="border-top:1px solid var(--border);padding-top:16px;margin-top:4px">
+      <div class="toggle-group">
+        <label for="s-ssl"><span style="font-size:1.1em">🔒</span> Enable SSL / HTTPS</label>
+        <label class="toggle"><input type="checkbox" id="s-ssl" onchange="onSSLChange(); previewConf()" /><span class="toggle-slider"></span></label>
+      </div>
+
+      <div id="ssl-options" style="display:none">
+        <div class="ssl-section">
+          <h4>🔐 Certificate Binding</h4>
+
+          <!-- Cert picker (populated from stored certs) -->
+          <div class="form-group">
+            <label>Select Certificate</label>
+            <select id="s-certid" onchange="onCertPick(); previewConf()">
+              <option value="">— Manual path entry —</option>
+            </select>
+            <div class="form-hint">Choose a cert from the Certificates store, or enter paths manually below.</div>
+          </div>
+
+          <div id="cert-manual-paths">
+            <div class="form-row">
+              <div class="form-group">
+                <label>Certificate File (remote path)</label>
+                <input type="text" id="s-certfile" placeholder="/etc/ssl/certs/example.pem" oninput="previewConf()" />
+              </div>
+              <div class="form-group">
+                <label>Key File (remote path)</label>
+                <input type="text" id="s-keyfile" placeholder="/etc/ssl/private/example.key" oninput="previewConf()" />
+              </div>
+            </div>
+          </div>
+
+          <div class="toggle-group" style="padding-top:8px">
+            <label for="s-hsts">Enable HSTS (strict transport security)</label>
+            <label class="toggle"><input type="checkbox" id="s-hsts" onchange="previewConf()" /><span class="toggle-slider"></span></label>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Extra directives -->
+    <div class="form-group" style="margin-top:12px">
+      <label>Extra Directives (inside server block)</label>
+      <textarea id="s-extra" rows="3" placeholder="client_max_body_size 100m;&#10;gzip on;" oninput="previewConf()" style="font-family:var(--mono);font-size:.82rem"></textarea>
+    </div>
+
+    <!-- Live preview -->
+    <div style="margin-top:4px">
+      <div style="font-size:.78rem;color:var(--text-dim);text-transform:uppercase;letter-spacing:.8px;margin-bottom:6px">Generated Config Preview</div>
+      <div class="preview-pane" id="conf-preview"># fill in the form above...</div>
+    </div>
+
+    <div class="modal-actions">
+      <button class="btn-secondary" onclick="closeSiteModal()">Cancel</button>
+      <button class="btn-warn btn-sm" onclick="previewConf()" style="padding:8px 14px">🔄 Refresh Preview</button>
+      <button class="btn-primary"    onclick="saveSite()">💾 Save Site</button>
+    </div>
+  </div>
+</div>
+
+<!-- ─── UPLOAD CERT MODAL ─── -->
+<div class="modal-backdrop" id="upload-cert-modal">
+  <div class="modal">
+    <h3>⬆ Upload Certificate</h3>
+    <div class="form-group"><label>Label <span class="req">*</span></label><input type="text" id="uc-label" placeholder="example.com SSL" /></div>
+
+    <div class="form-group">
+      <label>Certificate File (.pem / .crt)</label>
+      <div class="file-upload-area" onclick="document.getElementById('uc-cert-file').click()">
+        <div class="upload-icon">📄</div>
+        <p>Click to select certificate file</p>
+        <div class="file-chosen" id="uc-cert-chosen">No file chosen</div>
+        <input type="file" id="uc-cert-file" accept=".pem,.crt,.cer" onchange="updateFileLabel('uc-cert-file','uc-cert-chosen')" />
+      </div>
+    </div>
+
+    <div class="form-group">
+      <label>Private Key File (.key / .pem)</label>
+      <div class="file-upload-area" onclick="document.getElementById('uc-key-file').click()">
+        <div class="upload-icon">🔑</div>
+        <p>Click to select private key file</p>
+        <div class="file-chosen" id="uc-key-chosen">No file chosen</div>
+        <input type="file" id="uc-key-file" accept=".key,.pem" onchange="updateFileLabel('uc-key-file','uc-key-chosen')" />
+      </div>
+    </div>
+
+    <div class="form-group">
+      <label>Chain / CA Bundle (optional)</label>
+      <div class="file-upload-area" onclick="document.getElementById('uc-chain-file').click()">
+        <div class="upload-icon">🔗</div>
+        <p>Click to select chain file (optional)</p>
+        <div class="file-chosen" id="uc-chain-chosen">No file chosen</div>
+        <input type="file" id="uc-chain-file" accept=".pem,.crt,.cer" onchange="updateFileLabel('uc-chain-file','uc-chain-chosen')" />
+      </div>
+    </div>
+
+    <div style="border-top:1px solid var(--border);padding-top:16px;margin-top:4px">
+      <div style="font-size:.82rem;color:var(--text-dim);margin-bottom:10px">Where should these files live on the nginx server?</div>
+      <div class="form-row">
+        <div class="form-group"><label>Remote Cert Path</label><input type="text" id="uc-remote-cert" placeholder="/etc/nginx/ssl/example.com.pem" /></div>
+        <div class="form-group"><label>Remote Key Path</label><input type="text" id="uc-remote-key" placeholder="/etc/nginx/ssl/example.com.key" /></div>
+      </div>
+      <div class="form-group"><label>Remote Chain Path (optional)</label><input type="text" id="uc-remote-chain" placeholder="/etc/nginx/ssl/example.com.chain.pem" /></div>
+    </div>
+
+    <div class="modal-actions">
+      <button class="btn-secondary" onclick="closeUploadCertModal()">Cancel</button>
+      <button class="btn-primary" onclick="uploadCert()">⬆ Upload &amp; Save</button>
+    </div>
+  </div>
+</div>
+
+<!-- ─── REGISTER REMOTE CERT MODAL ─── -->
+<div class="modal-backdrop" id="remote-cert-modal">
+  <div class="modal">
+    <h3>🔗 Register Existing Remote Certificate</h3>
+    <p style="font-size:.85rem;color:var(--text-dim);margin-bottom:20px">The cert already exists on the nginx server — just tell nginx-manager where it is so it can be selected in the Site Builder.</p>
+    <div class="form-group"><label>Label <span class="req">*</span></label><input type="text" id="rc-label" placeholder="example.com (Let's Encrypt)" /></div>
+    <div class="form-row">
+      <div class="form-group"><label>Remote Cert Path <span class="req">*</span></label><input type="text" id="rc-cert" placeholder="/etc/letsencrypt/live/example.com/fullchain.pem" /></div>
+      <div class="form-group"><label>Remote Key Path <span class="req">*</span></label><input type="text" id="rc-key" placeholder="/etc/letsencrypt/live/example.com/privkey.pem" /></div>
+    </div>
+    <div class="modal-actions">
+      <button class="btn-secondary" onclick="document.getElementById('remote-cert-modal').classList.remove('open')">Cancel</button>
+      <button class="btn-primary" onclick="saveRemoteCert()">🔗 Register</button>
+    </div>
+  </div>
+</div>
+
+<!-- ─── SCAN RESULTS MODAL ─── -->
+<div class="modal-backdrop" id="scan-modal">
+  <div class="modal modal-wide">
+    <h3>🔍 Certificate Scan Results</h3>
+    <p style="font-size:.85rem;color:var(--text-dim);margin-bottom:20px">Files found on the server. Click a suggestion to register it.</p>
+    <div id="scan-results"></div>
+    <div class="modal-actions">
+      <button class="btn-secondary" onclick="document.getElementById('scan-modal').classList.remove('open')">Close</button>
+    </div>
+  </div>
+</div>
+
+<!-- ─── NEW CONFIG MODAL ─── -->
 <div class="modal-backdrop" id="new-config-modal">
   <div class="modal">
     <h3>📄 New Config File</h3>
-    <div class="form-group">
-      <label>Filename *</label>
-      <input type="text" id="f-new-cfg-name" placeholder="mysite.conf" />
-    </div>
+    <div class="form-group"><label>Filename <span class="req">*</span></label><input type="text" id="f-new-cfg-name" placeholder="mysite.conf" /></div>
     <div class="form-group">
       <label>Template</label>
       <select id="f-cfg-template">
@@ -780,134 +627,59 @@
   </div>
 </div>
 
-<!-- Toast container -->
 <div id="toast-container"></div>
 
+<!-- ══════════════════════ SCRIPT ══════════════════════ -->
 <script>
-// ============================================================== STATE
-const state = {
-  agents: [],
-  currentAgentId: null,
+// ─── STATE ───────────────────────────────────────────
+const S = {
+  agents: [], currentAgentId: null,
+  configs: [], certs: [], sites: [],
   currentFile: null,
-  configs: [],
-  socket: null,
-  socketToken: 'authenticated', // simplified token for socket auth
+  socket: null, socketToken: 'authenticated',
+  editingSiteId: null, editingCertId: null,
 };
 
-const TEMPLATES = {
+const CONF_TEMPLATES = {
   blank: '',
-  proxy: `server {
-    listen 80;
-    server_name example.com;
-
-    location / {
-        proxy_pass http://127.0.0.1:8080;
-        proxy_set_header Host $host;
-        proxy_set_header X-Real-IP $remote_addr;
-        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Proto $scheme;
-        proxy_read_timeout 300s;
-    }
-}
-`,
-  static: `server {
-    listen 80;
-    server_name example.com;
-    root /var/www/html;
-    index index.html;
-
-    location / {
-        try_files $uri $uri/ =404;
-    }
-
-    location ~* \\.(jpg|jpeg|png|gif|ico|css|js)$ {
-        expires 1y;
-        add_header Cache-Control "public, immutable";
-    }
-}
-`,
-  upstream: `upstream backend {
-    least_conn;
-    server 10.0.0.1:8080;
-    server 10.0.0.2:8080;
-    keepalive 32;
-}
-
-server {
-    listen 80;
-    server_name example.com;
-
-    location / {
-        proxy_pass http://backend;
-        proxy_set_header Host $host;
-        proxy_set_header X-Real-IP $remote_addr;
-        proxy_http_version 1.1;
-        proxy_set_header Connection "";
-    }
-}
-`,
-  ssl: `server {
-    listen 443 ssl http2;
-    server_name example.com;
-
-    ssl_certificate     /etc/ssl/certs/example.com.pem;
-    ssl_certificate_key /etc/ssl/private/example.com.key;
-    ssl_protocols       TLSv1.2 TLSv1.3;
-    ssl_ciphers         HIGH:!aNULL:!MD5;
-
-    location / {
-        proxy_pass http://127.0.0.1:8080;
-        proxy_set_header Host $host;
-        proxy_set_header X-Real-IP $remote_addr;
-    }
-}
-
-server {
-    listen 80;
-    server_name example.com;
-    return 301 https://$host$request_uri;
-}
-`,
+  proxy: `server {\n    listen 80;\n    server_name example.com;\n\n    location / {\n        proxy_pass http://127.0.0.1:8080;\n        proxy_set_header Host $host;\n        proxy_set_header X-Real-IP $remote_addr;\n    }\n}\n`,
+  static: `server {\n    listen 80;\n    server_name example.com;\n    root /var/www/html;\n    index index.html;\n\n    location / { try_files $uri $uri/ =404; }\n}\n`,
+  upstream: `upstream backend {\n    least_conn;\n    server 10.0.0.1:8080;\n    server 10.0.0.2:8080;\n}\n\nserver {\n    listen 80;\n    server_name example.com;\n\n    location / {\n        proxy_pass http://backend;\n        proxy_http_version 1.1;\n        proxy_set_header Connection "";\n        proxy_set_header Host $host;\n    }\n}\n`,
+  ssl: `server {\n    listen 443 ssl http2;\n    server_name example.com;\n\n    ssl_certificate     /etc/ssl/certs/example.com.pem;\n    ssl_certificate_key /etc/ssl/private/example.com.key;\n    ssl_protocols       TLSv1.2 TLSv1.3;\n\n    location / {\n        proxy_pass http://127.0.0.1:8080;\n        proxy_set_header Host $host;\n    }\n}\n\nserver {\n    listen 80;\n    server_name example.com;\n    return 301 https://$host$request_uri;\n}\n`,
 };
 
-// ============================================================== INIT
+const SITE_ICONS = { proxy: '🔀', static: '📁', redirect: '↩' };
+
+// ─── INIT ─────────────────────────────────────────────
 window.addEventListener('DOMContentLoaded', async () => {
   const me = await apiFetch('/api/me');
-  if (me && me.authenticated) {
-    showApp();
-  }
+  if (me && me.authenticated) showApp();
   initSocket();
+  // Tab click delegation
+  document.querySelectorAll('.tab-btn').forEach(btn => {
+    btn.addEventListener('click', () => switchTab(btn.dataset.tab));
+  });
 });
 
-// ============================================================== SOCKET
+// ─── SOCKET ───────────────────────────────────────────
 function initSocket() {
-  state.socket = io();
-  state.socket.on('log', data => appendLog(data));
-  state.socket.on('done', data => {
-    if (data.success) {
-      toast('✅ Operation completed successfully', 'success');
-    } else {
-      toast('❌ Operation failed — see log', 'error');
-    }
+  S.socket = io();
+  S.socket.on('log', data => appendLog(data));
+  S.socket.on('done', data => {
+    if (data.success) toast('✅ Operation completed', 'success');
+    else              toast('❌ Operation failed — see log', 'error');
     enableButtons();
   });
 }
 
-// ============================================================== AUTH
+// ─── AUTH ─────────────────────────────────────────────
 async function doLogin() {
   const pass = document.getElementById('login-pass').value;
-  const err  = document.getElementById('login-error');
-  err.textContent = '';
-  const res = await fetch('/api/login', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ password: pass }),
-  });
-  if (res.ok) {
-    showApp();
-  } else {
-    err.textContent = '✗ Incorrect password';
-  }
+  const errEl = document.getElementById('login-error');
+  errEl.textContent = '';
+  const r = await fetch('/api/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ password: pass }) });
+  if (r.ok) showApp();
+  else errEl.textContent = '✗ Incorrect password';
 }
 
 async function doLogout() {
@@ -921,90 +693,88 @@ function showApp() {
   loadAgents();
 }
 
-// ============================================================== API
+// ─── API ──────────────────────────────────────────────
 async function apiFetch(url, opts = {}) {
   try {
     const r = await fetch(url, {
       headers: { 'Content-Type': 'application/json', ...(opts.headers || {}) },
       ...opts,
-      body: opts.body ? JSON.stringify(opts.body) : undefined,
+      body: opts.body && typeof opts.body !== 'string' ? JSON.stringify(opts.body) : opts.body,
     });
     if (r.status === 401) { location.reload(); return null; }
     return await r.json();
   } catch { return null; }
 }
 
-// ============================================================== AGENTS
+async function apiUpload(url, formData) {
+  try {
+    const r = await fetch(url, { method: 'POST', body: formData });
+    if (r.status === 401) { location.reload(); return null; }
+    return await r.json();
+  } catch { return null; }
+}
+
+// ─── AGENTS ───────────────────────────────────────────
 async function loadAgents() {
-  state.agents = await apiFetch('/api/agents') || [];
+  S.agents = await apiFetch('/api/agents') || [];
   renderAgentList();
   const lbl = document.getElementById('agent-count-label');
-  lbl.textContent = state.agents.length === 0 ? 'No servers' : `${state.agents.length} server${state.agents.length > 1 ? 's' : ''}`;
+  lbl.textContent = S.agents.length === 0 ? 'No servers' : `${S.agents.length} server${S.agents.length !== 1 ? 's' : ''}`;
 }
 
 function renderAgentList() {
   const list = document.getElementById('agent-list');
-  if (!state.agents.length) {
-    list.innerHTML = `<div class="empty-state"><div class="icon">🖥️</div><p>No servers yet.</p></div>`;
-    return;
-  }
-  list.innerHTML = state.agents.map(a => `
-    <div class="agent-item ${a.id === state.currentAgentId ? 'active' : ''}" onclick="selectAgent('${a.id}')">
+  if (!S.agents.length) { list.innerHTML = `<div class="empty-state"><div class="icon">🖥️</div><p>No servers yet.</p></div>`; return; }
+  list.innerHTML = S.agents.map(a => `
+    <div class="agent-item ${a.id === S.currentAgentId ? 'active' : ''}" onclick="selectAgent('${a.id}')">
       <div class="agent-dot" id="dot-${a.id}"></div>
       <div class="agent-item-info">
         <div class="agent-item-name">${esc(a.name)}</div>
         <div class="agent-item-host">${esc(a.host)}</div>
       </div>
-    </div>
-  `).join('');
+    </div>`).join('');
 }
 
 async function selectAgent(id) {
-  state.currentAgentId = id;
-  state.currentFile = null;
+  S.currentAgentId = id;
+  S.currentFile = null;
+  S.editingSiteId = null;
   renderAgentList();
-  const agent = state.agents.find(a => a.id === id);
+  const agent = S.agents.find(a => a.id === id);
   if (!agent) return;
-
   document.getElementById('welcome').style.display = 'none';
   document.getElementById('agent-panel').classList.add('visible');
   document.getElementById('panel-agent-name').textContent = agent.name;
   document.getElementById('panel-agent-host').textContent = `${agent.sshUser}@${agent.host}:${agent.sshPort || 22}  •  ${agent.nginxConfigPath}`;
   document.getElementById('stat-host').textContent = agent.host;
-
   document.getElementById('editor-section').style.display = 'none';
-  switchTab('configs');
-  await loadConfigs();
+  switchTab('builder');
+  await Promise.all([loadSites(), loadCerts(), loadConfigs()]);
 }
 
 async function deleteCurrentAgent() {
-  if (!state.currentAgentId) return;
-  const agent = state.agents.find(a => a.id === state.currentAgentId);
-  if (!confirm(`Remove ${agent.name}?`)) return;
-  await apiFetch(`/api/agents/${state.currentAgentId}`, { method: 'DELETE' });
-  state.currentAgentId = null;
+  if (!S.currentAgentId) return;
+  const a = S.agents.find(a => a.id === S.currentAgentId);
+  if (!confirm(`Remove ${a.name}?`)) return;
+  await apiFetch(`/api/agents/${S.currentAgentId}`, { method: 'DELETE' });
+  S.currentAgentId = null;
   document.getElementById('agent-panel').classList.remove('visible');
   document.getElementById('welcome').style.display = 'flex';
   await loadAgents();
   toast('Server removed', 'info');
 }
 
-// ============================================================== ADD/EDIT AGENT MODAL
-let editingAgentId = null;
-
+// Add/Edit agent modal
+let _editAgentId = null;
 function openAddAgent() {
-  editingAgentId = null;
+  _editAgentId = null;
   document.getElementById('agent-modal-title').textContent = '➕ Add Nginx Server';
-  ['name','host','user','pass','key','desc'].forEach(f => document.getElementById('f-'+f).value = '');
+  ['name','host','user','pass','key','desc'].forEach(f => { const el = document.getElementById('f-'+f); if (el) el.value = ''; });
   document.getElementById('f-port').value = '22';
-  document.getElementById('f-cfg').value = '/etc/nginx';
+  document.getElementById('f-cfg').value  = '/etc/nginx';
   document.getElementById('agent-modal').classList.add('open');
 }
-
-function closeAgentModal() {
-  document.getElementById('agent-modal').classList.remove('open');
-}
-
+function closeAgentModal() { document.getElementById('agent-modal').classList.remove('open'); }
 async function saveAgent() {
   const data = {
     name: document.getElementById('f-name').value.trim(),
@@ -1016,57 +786,438 @@ async function saveAgent() {
     nginxConfigPath: document.getElementById('f-cfg').value.trim() || '/etc/nginx',
     description: document.getElementById('f-desc').value.trim(),
   };
-  if (!data.name || !data.host || !data.sshUser) {
-    toast('Name, host, and SSH user are required', 'error');
-    return;
-  }
-  let res;
-  if (editingAgentId) {
-    res = await apiFetch(`/api/agents/${editingAgentId}`, { method: 'PUT', body: data });
-  } else {
-    res = await apiFetch('/api/agents', { method: 'POST', body: data });
-  }
+  if (!data.name || !data.host || !data.sshUser) { toast('Name, host, SSH user required', 'error'); return; }
+  const res = _editAgentId
+    ? await apiFetch(`/api/agents/${_editAgentId}`, { method: 'PUT', body: data })
+    : await apiFetch('/api/agents', { method: 'POST', body: data });
   closeAgentModal();
   await loadAgents();
-  if (res && res.id) {
-    toast(`${editingAgentId ? 'Updated' : 'Added'} ${res.name}`, 'success');
-    selectAgent(res.id);
+  if (res?.id) { toast(`${_editAgentId ? 'Updated' : 'Added'} ${res.name}`, 'success'); selectAgent(res.id); }
+}
+
+// ─── SITES ────────────────────────────────────────────
+async function loadSites() {
+  if (!S.currentAgentId) return;
+  S.sites = await apiFetch(`/api/agents/${S.currentAgentId}/sites`) || [];
+  document.getElementById('stat-sites').textContent = S.sites.length;
+  renderSites();
+}
+
+function renderSites() {
+  const grid = document.getElementById('sites-grid');
+  if (!S.sites.length) {
+    grid.innerHTML = `<div class="empty-state" style="grid-column:1/-1">
+      <div class="icon">🏗️</div>
+      <p>No sites yet.</p>
+      <p style="font-size:.82rem;margin-top:6px">Click <strong>＋ Add Site</strong> to visually create an nginx server block — no conf file editing needed!</p>
+    </div>`;
+    return;
+  }
+  grid.innerHTML = S.sites.map(s => `
+    <div class="site-card">
+      <div class="site-card-header">
+        <span class="site-card-icon">${SITE_ICONS[s.type] || '🌐'}</span>
+        <div style="flex:1;min-width:0">
+          <div class="site-card-title">${esc(s.name)}</div>
+          <div class="site-card-host">${esc(s.serverName || '(any)')}</div>
+        </div>
+      </div>
+      <div class="site-card-badges">
+        <span class="badge badge-info">${s.type}</span>
+        ${s.ssl ? `<span class="badge badge-success">🔒 SSL</span>` : `<span class="badge badge-warn">⚠ HTTP</span>`}
+        ${s.ssl && s.certId ? `<span class="badge badge-purple">🔐 Cert Bound</span>` : ''}
+        ${s.upstream && s.upstream.length > 1 ? `<span class="badge badge-accent">${s.upstream.length} upstreams</span>` : ''}
+        ${s.hsts ? `<span class="badge badge-success">HSTS</span>` : ''}
+      </div>
+      ${s.upstream && s.upstream.length ? `<div style="font-size:.75rem;color:var(--text-dim);font-family:var(--mono)">${s.upstream.slice(0,2).map(esc).join(', ')}${s.upstream.length > 2 ? ` +${s.upstream.length-2} more` : ''}</div>` : ''}
+      <div class="site-card-actions">
+        <button class="btn-primary btn-sm" onclick="pushSite('${s.id}')">📤 Push</button>
+        <button class="btn-secondary btn-sm" onclick="editSite('${s.id}')">✏️ Edit</button>
+        <button class="btn-danger btn-sm" onclick="deleteSite('${s.id}')">🗑</button>
+      </div>
+    </div>`).join('');
+}
+
+function openSiteModal(site = null) {
+  S.editingSiteId = site ? site.id : null;
+  document.getElementById('site-modal-title').textContent = site ? '✏️ Edit Site' : '🏗️ Add Site';
+
+  // Reset
+  document.getElementById('s-name').value       = site?.name       || '';
+  document.getElementById('s-type').value       = site?.type       || 'proxy';
+  document.getElementById('s-servername').value = site?.serverName || '';
+  document.getElementById('s-port').value       = site?.listenPort || 80;
+  document.getElementById('s-staticroot').value = site?.staticRoot || '/var/www/html';
+  document.getElementById('s-redirectto').value = site?.redirectTo || '';
+  document.getElementById('s-timeout').value    = site?.proxyTimeout || 60;
+  document.getElementById('s-lbmethod').value   = site?.lbMethod  || 'round_robin';
+  document.getElementById('s-extra').value      = site?.extraDirectives || '';
+  document.getElementById('s-ssl').checked      = site?.ssl       || false;
+  document.getElementById('s-hsts').checked     = site?.hsts      || false;
+  document.getElementById('s-certid').value     = site?.certId    || '';
+  document.getElementById('s-certfile').value   = site?.certFile  || '';
+  document.getElementById('s-keyfile').value    = site?.keyFile   || '';
+
+  // Rebuild upstream list
+  renderUpstreams(site?.upstream || ['']);
+
+  // Populate cert dropdown
+  const sel = document.getElementById('s-certid');
+  sel.innerHTML = '<option value="">— Manual path entry —</option>';
+  S.certs.forEach(c => {
+    const opt = document.createElement('option');
+    opt.value = c.id;
+    opt.textContent = `🔐 ${c.label}`;
+    if (c.id === site?.certId) opt.selected = true;
+    sel.appendChild(opt);
+  });
+
+  onTypeChange();
+  onSSLChange();
+  previewConf();
+  document.getElementById('site-modal').classList.add('open');
+}
+
+function closeSiteModal() { document.getElementById('site-modal').classList.remove('open'); }
+
+function onTypeChange() {
+  const t = document.getElementById('s-type').value;
+  document.getElementById('s-proxy-section').style.display    = t === 'proxy'    ? '' : 'none';
+  document.getElementById('s-static-section').style.display  = t === 'static'   ? '' : 'none';
+  document.getElementById('s-redirect-section').style.display = t === 'redirect' ? '' : 'none';
+}
+
+function onSSLChange() {
+  const ssl = document.getElementById('s-ssl').checked;
+  document.getElementById('ssl-options').style.display = ssl ? '' : 'none';
+  if (!ssl) return;
+  onCertPick();
+}
+
+function onCertPick() {
+  const certId = document.getElementById('s-certid').value;
+  const manual = document.getElementById('cert-manual-paths');
+  if (certId) {
+    const cert = S.certs.find(c => c.id === certId);
+    if (cert) {
+      document.getElementById('s-certfile').value = cert.remoteCertPath || '';
+      document.getElementById('s-keyfile').value  = cert.remoteKeyPath  || '';
+    }
+    manual.style.opacity = '0.6';
+  } else {
+    manual.style.opacity = '1';
+  }
+  previewConf();
+}
+
+function renderUpstreams(list) {
+  const ul = document.getElementById('upstream-list');
+  ul.innerHTML = '';
+  list.forEach((u, i) => {
+    const row = document.createElement('div');
+    row.className = 'upstream-item';
+    row.innerHTML = `
+      <input type="text" value="${esc(u)}" placeholder="10.0.0.1:8080" oninput="previewConf()" />
+      ${list.length > 1 ? `<button class="btn-danger btn-xs" onclick="removeUpstream(this)">✕</button>` : ''}
+    `;
+    ul.appendChild(row);
+  });
+}
+
+function addUpstream() {
+  const ul = document.getElementById('upstream-list');
+  const row = document.createElement('div');
+  row.className = 'upstream-item';
+  row.innerHTML = `<input type="text" value="" placeholder="10.0.0.2:8080" oninput="previewConf()" /><button class="btn-danger btn-xs" onclick="removeUpstream(this)">✕</button>`;
+  ul.appendChild(row);
+  // Re-render to add remove buttons to first item too
+  const vals = getUpstreams();
+  renderUpstreams(vals);
+  previewConf();
+}
+
+function removeUpstream(btn) {
+  btn.closest('.upstream-item').remove();
+  // Re-render
+  const vals = getUpstreams();
+  renderUpstreams(vals);
+  previewConf();
+}
+
+function getUpstreams() {
+  return [...document.querySelectorAll('#upstream-list input')].map(i => i.value.trim()).filter(Boolean);
+}
+
+function buildSiteObj() {
+  const ssl    = document.getElementById('s-ssl').checked;
+  const certId = document.getElementById('s-certid').value;
+  return {
+    name:            document.getElementById('s-name').value.trim(),
+    type:            document.getElementById('s-type').value,
+    serverName:      document.getElementById('s-servername').value.trim(),
+    listenPort:      parseInt(document.getElementById('s-port').value) || 80,
+    upstream:        getUpstreams(),
+    lbMethod:        document.getElementById('s-lbmethod').value,
+    staticRoot:      document.getElementById('s-staticroot').value.trim(),
+    redirectTo:      document.getElementById('s-redirectto').value.trim(),
+    ssl,
+    certId:          certId || null,
+    certFile:        document.getElementById('s-certfile').value.trim(),
+    keyFile:         document.getElementById('s-keyfile').value.trim(),
+    hsts:            document.getElementById('s-hsts').checked,
+    proxyTimeout:    parseInt(document.getElementById('s-timeout').value) || 60,
+    extraDirectives: document.getElementById('s-extra').value.trim(),
+    enabled:         true,
+  };
+}
+
+async function previewConf() {
+  const site = buildSiteObj();
+  if (!site.name) { document.getElementById('conf-preview').textContent = '# Fill in the form above...'; return; }
+  const res = await apiFetch(`/api/agents/${S.currentAgentId}/sites/preview`, { method: 'POST', body: site });
+  document.getElementById('conf-preview').textContent = res?.conf || '# Preview error';
+}
+
+async function saveSite() {
+  const site = buildSiteObj();
+  if (!site.name) { toast('Site name is required', 'error'); return; }
+  let res;
+  if (S.editingSiteId) {
+    res = await apiFetch(`/api/agents/${S.currentAgentId}/sites/${S.editingSiteId}`, { method: 'PUT', body: site });
+  } else {
+    res = await apiFetch(`/api/agents/${S.currentAgentId}/sites`, { method: 'POST', body: site });
+  }
+  if (res?.id) {
+    toast(`Site "${res.name}" saved`, 'success');
+    closeSiteModal();
+    await loadSites();
+    await loadConfigs();
+  } else {
+    toast('Error saving site', 'error');
   }
 }
 
-// ============================================================== CONFIGS
+async function editSite(siteId) {
+  const site = S.sites.find(s => s.id === siteId);
+  if (site) openSiteModal(site);
+}
+
+async function deleteSite(siteId) {
+  const s = S.sites.find(s => s.id === siteId);
+  if (!confirm(`Delete site "${s?.name}"? This will also remove the generated config file.`)) return;
+  await apiFetch(`/api/agents/${S.currentAgentId}/sites/${siteId}`, { method: 'DELETE' });
+  toast('Site deleted', 'info');
+  await loadSites();
+  await loadConfigs();
+}
+
+async function pushSite(siteId) {
+  const s = S.sites.find(s => s.id === siteId);
+  if (!s) return;
+  const fname = `site_${s.name.replace(/[^a-zA-Z0-9_-]/g,'_')}.conf`;
+  switchTab('terminal');
+  clearLog();
+  disableButtons();
+  S.socket.emit('push', { agentId: S.currentAgentId, filename: fname, token: S.socketToken });
+}
+
+// ─── CERTIFICATES ─────────────────────────────────────
+async function loadCerts() {
+  if (!S.currentAgentId) return;
+  S.certs = await apiFetch(`/api/agents/${S.currentAgentId}/certs`) || [];
+  document.getElementById('stat-certs-count').textContent = S.certs.length;
+  renderCerts();
+}
+
+function renderCerts() {
+  const list = document.getElementById('certs-list');
+  if (!S.certs.length) {
+    list.innerHTML = `<div class="empty-state">
+      <div class="icon">🔐</div>
+      <p>No certificates yet.</p>
+      <p style="font-size:.82rem;margin-top:6px">
+        <strong>Scan Server</strong> to find existing certs,
+        <strong>Register Remote</strong> for certs already on the server,
+        or <strong>Upload Cert</strong> to push new files.
+      </p>
+    </div>`;
+    return;
+  }
+  list.innerHTML = S.certs.map(c => `
+    <div class="cert-card">
+      <div class="cert-icon">🔐</div>
+      <div class="cert-info">
+        <div class="cert-label">${esc(c.label)}</div>
+        <div class="cert-paths">
+          cert: ${esc(c.remoteCertPath || '(not set)')}<br>
+          key:  ${esc(c.remoteKeyPath  || '(not set)')}
+        </div>
+        <div style="margin-top:6px;display:flex;gap:6px;flex-wrap:wrap">
+          ${c.remoteOnly ? `<span class="badge badge-info">Remote Only</span>` : `<span class="badge badge-success">Files Uploaded</span>`}
+          ${c.localCert  ? `<span class="badge badge-accent">📄 Cert</span>` : ''}
+          ${c.localKey   ? `<span class="badge badge-accent">🔑 Key</span>`  : ''}
+          ${c.localChain ? `<span class="badge badge-accent">🔗 Chain</span>` : ''}
+        </div>
+      </div>
+      <div class="cert-actions">
+        ${!c.remoteOnly && c.localCert ? `<button class="btn-purple btn-sm" onclick="pushCert('${c.id}')">📤 Push to Server</button>` : ''}
+        <button class="btn-danger btn-sm" onclick="deleteCert('${c.id}')">🗑</button>
+      </div>
+    </div>`).join('');
+}
+
+function openUploadCert() {
+  ['uc-label','uc-remote-cert','uc-remote-key','uc-remote-chain'].forEach(id => document.getElementById(id).value = '');
+  ['uc-cert-chosen','uc-key-chosen','uc-chain-chosen'].forEach(id => document.getElementById(id).textContent = 'No file chosen');
+  ['uc-cert-file','uc-key-file','uc-chain-file'].forEach(id => document.getElementById(id).value = '');
+  document.getElementById('upload-cert-modal').classList.add('open');
+}
+function closeUploadCertModal() { document.getElementById('upload-cert-modal').classList.remove('open'); }
+
+function updateFileLabel(inputId, labelId) {
+  const f = document.getElementById(inputId).files[0];
+  document.getElementById(labelId).textContent = f ? f.name : 'No file chosen';
+}
+
+async function uploadCert() {
+  const label = document.getElementById('uc-label').value.trim();
+  if (!label) { toast('Label is required', 'error'); return; }
+
+  const fd = new FormData();
+  fd.append('label',          label);
+  fd.append('remoteCertPath', document.getElementById('uc-remote-cert').value.trim());
+  fd.append('remoteKeyPath',  document.getElementById('uc-remote-key').value.trim());
+  fd.append('remoteChainPath',document.getElementById('uc-remote-chain').value.trim());
+
+  const certFile  = document.getElementById('uc-cert-file').files[0];
+  const keyFile   = document.getElementById('uc-key-file').files[0];
+  const chainFile = document.getElementById('uc-chain-file').files[0];
+
+  if (!certFile) { toast('Certificate file is required', 'error'); return; }
+  if (!keyFile)  { toast('Private key file is required', 'error'); return; }
+
+  fd.append('certFile', certFile);
+  fd.append('keyFile',  keyFile);
+  if (chainFile) fd.append('chainFile', chainFile);
+
+  const res = await apiUpload(`/api/agents/${S.currentAgentId}/certs`, fd);
+  if (res?.id) {
+    toast(`Certificate "${label}" uploaded`, 'success');
+    closeUploadCertModal();
+    await loadCerts();
+  } else {
+    toast(`Upload failed: ${res?.error || 'Unknown error'}`, 'error');
+  }
+}
+
+function openAddRemoteCert() {
+  ['rc-label','rc-cert','rc-key'].forEach(id => document.getElementById(id).value = '');
+  document.getElementById('remote-cert-modal').classList.add('open');
+}
+
+async function saveRemoteCert() {
+  const label          = document.getElementById('rc-label').value.trim();
+  const remoteCertPath = document.getElementById('rc-cert').value.trim();
+  const remoteKeyPath  = document.getElementById('rc-key').value.trim();
+  if (!label || !remoteCertPath || !remoteKeyPath) { toast('All fields are required', 'error'); return; }
+  const res = await apiFetch(`/api/agents/${S.currentAgentId}/certs/remote`, {
+    method: 'POST', body: { label, remoteCertPath, remoteKeyPath },
+  });
+  if (res?.id) {
+    toast(`Certificate "${label}" registered`, 'success');
+    document.getElementById('remote-cert-modal').classList.remove('open');
+    await loadCerts();
+  } else {
+    toast(`Error: ${res?.error || 'Unknown'}`, 'error');
+  }
+}
+
+async function scanCerts() {
+  toast('🔍 Scanning server for certificates...', 'info');
+  const res = await apiFetch(`/api/agents/${S.currentAgentId}/certs/scan`, { method: 'POST' });
+  if (!res) { toast('Scan failed', 'error'); return; }
+
+  const modal   = document.getElementById('scan-modal');
+  const results = document.getElementById('scan-results');
+
+  if (!res.files || !res.files.length) {
+    results.innerHTML = `<p style="color:var(--text-dim)">No certificate files found in common paths.</p>`;
+  } else {
+    results.innerHTML = res.suggestions.map(sg => `
+      <div style="background:var(--surface2);border:1px solid var(--border);border-radius:var(--radius);padding:14px;margin-bottom:10px">
+        <div style="font-family:var(--mono);font-size:.82rem;color:var(--accent);margin-bottom:8px">📁 ${esc(sg.dir)}</div>
+        <div style="font-size:.78rem;color:var(--text-dim);margin-bottom:10px">
+          ${sg.files.map(f => `<div>${esc(f)}</div>`).join('')}
+        </div>
+        ${sg.certs.length && sg.keys.length ? `
+          <button class="btn-success btn-sm" onclick="quickRegister(${JSON.stringify(sg.dir).replace(/"/g,"'")},${JSON.stringify(sg.certs[0]).replace(/"/g,"'")},${JSON.stringify(sg.keys[0]).replace(/"/g,"'")})">
+            ✅ Register best match
+          </button>` : ''}
+      </div>`).join('') || `<div class="empty-state"><p>No cert/key pairs found.</p></div>`;
+  }
+
+  modal.classList.add('open');
+}
+
+async function quickRegister(dir, certPath, keyPath) {
+  const label = certPath.split('/').pop().replace(/\.(pem|crt|cer)$/,'');
+  const res = await apiFetch(`/api/agents/${S.currentAgentId}/certs/remote`, {
+    method: 'POST', body: { label, remoteCertPath: certPath, remoteKeyPath: keyPath },
+  });
+  if (res?.id) {
+    toast(`Registered ${label}`, 'success');
+    document.getElementById('scan-modal').classList.remove('open');
+    await loadCerts();
+  } else {
+    toast('Error registering cert', 'error');
+  }
+}
+
+function pushCert(certId) {
+  switchTab('terminal');
+  clearLog();
+  disableButtons();
+  S.socket.emit('pushCert', { agentId: S.currentAgentId, certId, token: S.socketToken });
+}
+
+async function deleteCert(certId) {
+  const c = S.certs.find(c => c.id === certId);
+  if (!confirm(`Delete certificate "${c?.label}"?`)) return;
+  await apiFetch(`/api/agents/${S.currentAgentId}/certs/${certId}`, { method: 'DELETE' });
+  toast('Certificate deleted', 'info');
+  await loadCerts();
+}
+
+// ─── RAW CONFIGS ──────────────────────────────────────
 async function loadConfigs() {
-  if (!state.currentAgentId) return;
-  const data = await apiFetch(`/api/agents/${state.currentAgentId}/configs`);
-  state.configs = data || [];
-  document.getElementById('stat-configs').textContent = state.configs.length;
+  if (!S.currentAgentId) return;
+  S.configs = await apiFetch(`/api/agents/${S.currentAgentId}/configs`) || [];
   renderConfigList();
 }
 
 function renderConfigList() {
   const list = document.getElementById('config-list');
-  if (!state.configs.length) {
-    list.innerHTML = `<div class="empty-state"><div class="icon">📂</div><p>No config files yet.<br>Click "Sync Configs" to pull from server,<br>or "New Config" to create one.</p></div>`;
+  if (!S.configs.length) {
+    list.innerHTML = `<div class="empty-state"><div class="icon">📂</div><p>No config files yet.<br>Use <strong>Sync</strong> to pull from server, or <strong>Visual Builder</strong> to create sites.</p></div>`;
     return;
   }
-  list.innerHTML = state.configs.map(c => `
-    <div class="config-item ${c.name === state.currentFile ? 'selected' : ''}" onclick="openConfig('${esc(c.name)}')">
+  list.innerHTML = S.configs.map(c => `
+    <div class="card-item ${c.name === S.currentFile ? 'selected' : ''}" onclick="openConfig('${esc(c.name)}')">
       <div>
-        <div class="config-item-name">📄 ${esc(c.name)}</div>
-        <div class="config-item-meta">${formatBytes(c.size)} • ${formatDate(c.modified)}</div>
+        <div class="card-item-name">📄 ${esc(c.name)}</div>
+        <div class="card-item-meta">${formatBytes(c.size)} • ${formatDate(c.modified)}</div>
       </div>
-      <div style="display:flex;gap:6px">
-        <button class="btn-primary btn-sm" onclick="event.stopPropagation();pushFile('${esc(c.name)}')">📤 Push</button>
-        <button class="btn-danger btn-sm" onclick="event.stopPropagation();deleteConfig('${esc(c.name)}')">🗑</button>
+      <div class="card-item-actions">
+        <button class="btn-primary btn-xs"  onclick="event.stopPropagation();pushFile('${esc(c.name)}')">📤 Push</button>
+        <button class="btn-danger btn-xs"   onclick="event.stopPropagation();deleteConfig('${esc(c.name)}')">🗑</button>
       </div>
-    </div>
-  `).join('');
+    </div>`).join('');
 }
 
 async function openConfig(filename) {
-  const data = await apiFetch(`/api/agents/${state.currentAgentId}/configs/${encodeURIComponent(filename)}`);
+  const data = await apiFetch(`/api/agents/${S.currentAgentId}/configs/${encodeURIComponent(filename)}`);
   if (!data) return;
-  state.currentFile = filename;
+  S.currentFile = filename;
   document.getElementById('editor-filename').textContent = filename;
   document.getElementById('code-editor').value = data.content;
   document.getElementById('editor-section').style.display = 'block';
@@ -1074,179 +1225,121 @@ async function openConfig(filename) {
 }
 
 function closeEditor() {
-  state.currentFile = null;
+  S.currentFile = null;
   document.getElementById('editor-section').style.display = 'none';
   renderConfigList();
 }
 
 async function saveConfig() {
-  if (!state.currentFile) return;
-  const content = document.getElementById('code-editor').value;
-  await apiFetch(`/api/agents/${state.currentAgentId}/configs/${encodeURIComponent(state.currentFile)}`, {
-    method: 'PUT',
-    body: { content },
+  if (!S.currentFile) return;
+  await apiFetch(`/api/agents/${S.currentAgentId}/configs/${encodeURIComponent(S.currentFile)}`, {
+    method: 'PUT', body: { content: document.getElementById('code-editor').value },
   });
   await loadConfigs();
-  toast(`Saved ${state.currentFile}`, 'success');
+  toast(`Saved ${S.currentFile}`, 'success');
 }
 
 async function deleteConfig(filename) {
   if (!confirm(`Delete ${filename}?`)) return;
-  await apiFetch(`/api/agents/${state.currentAgentId}/configs/${encodeURIComponent(filename)}`, { method: 'DELETE' });
-  if (state.currentFile === filename) closeEditor();
+  await apiFetch(`/api/agents/${S.currentAgentId}/configs/${encodeURIComponent(filename)}`, { method: 'DELETE' });
+  if (S.currentFile === filename) closeEditor();
   await loadConfigs();
   toast(`Deleted ${filename}`, 'info');
 }
 
-// New config
 function openNewConfig() {
   document.getElementById('f-new-cfg-name').value = '';
   document.getElementById('new-config-modal').classList.add('open');
 }
-
-function closeNewConfigModal() {
-  document.getElementById('new-config-modal').classList.remove('open');
-}
-
+function closeNewConfigModal() { document.getElementById('new-config-modal').classList.remove('open'); }
 async function createNewConfig() {
   let name = document.getElementById('f-new-cfg-name').value.trim();
   if (!name) { toast('Filename required', 'error'); return; }
   if (!name.endsWith('.conf') && !name.endsWith('.nginx')) name += '.conf';
-  const tmpl = document.getElementById('f-cfg-template').value;
-  const content = TEMPLATES[tmpl] || '';
-  await apiFetch(`/api/agents/${state.currentAgentId}/configs/${encodeURIComponent(name)}`, {
-    method: 'PUT',
-    body: { content },
-  });
+  const content = CONF_TEMPLATES[document.getElementById('f-cfg-template').value] || '';
+  await apiFetch(`/api/agents/${S.currentAgentId}/configs/${encodeURIComponent(name)}`, { method: 'PUT', body: { content } });
   closeNewConfigModal();
   await loadConfigs();
   openConfig(name);
+  switchTab('configs');
   toast(`Created ${name}`, 'success');
 }
 
-// ============================================================== SSH OPERATIONS
+// ─── SSH OPS ──────────────────────────────────────────
 function disableButtons() {
   ['btn-sync','btn-validate','btn-reload','btn-status','btn-push-file'].forEach(id => {
-    const b = document.getElementById(id);
-    if (b) b.disabled = true;
+    const b = document.getElementById(id); if (b) b.disabled = true;
   });
 }
-
 function enableButtons() {
   ['btn-sync','btn-validate','btn-reload','btn-status','btn-push-file'].forEach(id => {
-    const b = document.getElementById(id);
-    if (b) b.disabled = false;
+    const b = document.getElementById(id); if (b) b.disabled = false;
   });
 }
 
 function doSync() {
-  if (!state.currentAgentId) return;
-  switchTab('terminal');
-  clearLog();
-  disableButtons();
-  state.socket.emit('sync', { agentId: state.currentAgentId, token: state.socketToken });
-  state.socket.once('done', async () => {
-    await loadConfigs();
-  });
+  if (!S.currentAgentId) return;
+  switchTab('terminal'); clearLog(); disableButtons();
+  S.socket.emit('sync', { agentId: S.currentAgentId, token: S.socketToken });
+  S.socket.once('done', async () => { await loadConfigs(); });
 }
-
 function doValidate() {
-  if (!state.currentAgentId) return;
-  switchTab('terminal');
-  clearLog();
-  disableButtons();
-  state.socket.emit('validate', { agentId: state.currentAgentId, token: state.socketToken });
+  if (!S.currentAgentId) return;
+  switchTab('terminal'); clearLog(); disableButtons();
+  S.socket.emit('validate', { agentId: S.currentAgentId, token: S.socketToken });
 }
-
 function doReload() {
-  if (!state.currentAgentId) return;
-  switchTab('terminal');
-  clearLog();
-  disableButtons();
-  state.socket.emit('reload', { agentId: state.currentAgentId, token: state.socketToken });
+  if (!S.currentAgentId) return;
+  switchTab('terminal'); clearLog(); disableButtons();
+  S.socket.emit('reload', { agentId: S.currentAgentId, token: S.socketToken });
 }
-
 function doStatus() {
-  if (!state.currentAgentId) return;
+  if (!S.currentAgentId) return;
   switchTab('status');
   document.getElementById('status-output').textContent = '$ Checking nginx status...\n';
   disableButtons();
-  state.socket.emit('status', { agentId: state.currentAgentId, token: state.socketToken });
-  state.socket.once('log', data => {
-    document.getElementById('status-output').textContent += data;
-    // set status badge
-    if (data.includes('active')) {
-      document.getElementById('stat-status').textContent = '🟢 Active';
-      document.getElementById('stat-status').style.color = 'var(--success)';
-    } else if (data.includes('inactive') || data.includes('failed')) {
-      document.getElementById('stat-status').textContent = '🔴 Inactive';
-      document.getElementById('stat-status').style.color = 'var(--danger)';
-    }
-  });
-  state.socket.once('done', data => {
+  S.socket.emit('status', { agentId: S.currentAgentId, token: S.socketToken });
+  S.socket.once('done', data => {
     document.getElementById('status-output').textContent = data.output || '';
+    const active = data.output?.includes('active');
+    document.getElementById('stat-status').textContent  = active ? '🟢 Active' : '🔴 Inactive';
+    document.getElementById('stat-status').style.color  = active ? 'var(--success)' : 'var(--danger)';
   });
 }
-
 function pushFile(filename) {
-  if (!state.currentAgentId) return;
-  switchTab('terminal');
-  clearLog();
-  disableButtons();
-  state.socket.emit('push', { agentId: state.currentAgentId, filename, token: state.socketToken });
+  switchTab('terminal'); clearLog(); disableButtons();
+  S.socket.emit('push', { agentId: S.currentAgentId, filename, token: S.socketToken });
+}
+async function pushCurrentFile() {
+  if (!S.currentFile) return;
+  await saveConfig();
+  pushFile(S.currentFile);
 }
 
-function pushCurrentFile() {
-  if (!state.currentFile) return;
-  // Save first, then push
-  saveConfig().then(() => pushFile(state.currentFile));
-}
-
-// ============================================================== TABS
+// ─── TABS ─────────────────────────────────────────────
 function switchTab(name) {
-  document.querySelectorAll('.tab-btn').forEach((b, i) => {
-    const tabs = ['configs','terminal','status'];
-    b.classList.toggle('active', tabs[i] === name);
-  });
-  document.querySelectorAll('.tab-content').forEach((t, i) => {
-    const tabs = ['tab-configs','tab-terminal','tab-status'];
-    t.classList.toggle('active', t.id === 'tab-'+name);
-  });
+  document.querySelectorAll('.tab-btn').forEach(b => b.classList.toggle('active', b.dataset.tab === name));
+  document.querySelectorAll('.tab-content').forEach(t => t.classList.toggle('active', t.id === 'tab-' + name));
 }
 
-// ============================================================== LOG
-function appendLog(text) {
-  const el = document.getElementById('log-output');
-  el.textContent += text;
-  el.scrollTop = el.scrollHeight;
-}
+// ─── LOG ──────────────────────────────────────────────
+function appendLog(t) { const el = document.getElementById('log-output'); el.textContent += t; el.scrollTop = el.scrollHeight; }
+function clearLog() { document.getElementById('log-output').textContent = ''; }
 
-function clearLog() {
-  document.getElementById('log-output').textContent = '';
-}
-
-// ============================================================== TOAST
+// ─── TOAST ────────────────────────────────────────────
 function toast(msg, type = 'info') {
   const el = document.createElement('div');
-  el.className = `toast ${type}`;
-  el.textContent = msg;
+  el.className = `toast ${type}`; el.textContent = msg;
   document.getElementById('toast-container').appendChild(el);
   setTimeout(() => el.remove(), 4000);
 }
 
-// ============================================================== UTILS
+// ─── UTILS ────────────────────────────────────────────
 function esc(s) {
-  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');
 }
-
-function formatBytes(b) {
-  if (b < 1024) return b + ' B';
-  return (b / 1024).toFixed(1) + ' KB';
-}
-
-function formatDate(iso) {
-  return new Date(iso).toLocaleString();
-}
+function formatBytes(b) { return b < 1024 ? b + ' B' : (b/1024).toFixed(1) + ' KB'; }
+function formatDate(iso) { return new Date(iso).toLocaleString(); }
 </script>
 </body>
 </html>
