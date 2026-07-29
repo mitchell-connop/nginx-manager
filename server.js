@@ -58,6 +58,10 @@ function agentConfigDir(agentId) {
   return d;
 }
 
+function sudoPrefix(agent) {
+  return agent.sshUser === 'root' ? '' : 'sudo ';
+}
+
 async function sshExec(agent, command, emit) {
   const ssh = new NodeSSH();
   const connOpts = {
@@ -269,8 +273,9 @@ io.on('connection', (socket) => {
       socket.emit('log', `✅ SSH connected to ${agent.host}\n`);
       
       // Write file via tee (avoids permission issues)
+      const sudo = sudoPrefix(agent);
       const escaped = content.replace(/'/g, "'\\''");
-      const writeCmd = `echo '${escaped}' | sudo tee ${remotePath} > /dev/null && echo "Written OK"`;
+      const writeCmd = `echo '${escaped}' | ${sudo}tee ${remotePath} > /dev/null && echo "Written OK"`;
       const writeResult = await ssh.execCommand(writeCmd);
       
       if (writeResult.code !== 0) {
@@ -283,7 +288,7 @@ io.on('connection', (socket) => {
       
       // Test config
       socket.emit('log', `🔍 Running nginx -t...\n`);
-      const testResult = await ssh.execCommand('sudo nginx -t 2>&1');
+      const testResult = await ssh.execCommand(`${sudo}nginx -t 2>&1`);
       const testOutput = testResult.stdout + testResult.stderr;
       socket.emit('log', testOutput + '\n');
       
@@ -296,7 +301,7 @@ io.on('connection', (socket) => {
       
       // Reload nginx
       socket.emit('log', `🔄 Reloading nginx...\n`);
-      const reloadResult = await ssh.execCommand('sudo nginx -s reload 2>&1');
+      const reloadResult = await ssh.execCommand(`${sudo}nginx -s reload 2>&1`);
       const reloadOutput = reloadResult.stdout + reloadResult.stderr;
       socket.emit('log', reloadOutput + '\n');
       
@@ -323,7 +328,7 @@ io.on('connection', (socket) => {
     if (!agent) { socket.emit('done', { success: false, output: 'Agent not found' }); return; }
 
     socket.emit('log', `🔍 Validating nginx config on ${agent.host}...\n`);
-    const result = await sshExec(agent, 'sudo nginx -t 2>&1', l => socket.emit('log', l));
+    const result = await sshExec(agent, `${sudoPrefix(agent)}nginx -t 2>&1`, l => socket.emit('log', l));
     socket.emit('done', result);
   });
 
@@ -334,7 +339,7 @@ io.on('connection', (socket) => {
     if (!agent) { socket.emit('done', { success: false, output: 'Agent not found' }); return; }
 
     socket.emit('log', `🔄 Reloading nginx on ${agent.host}...\n`);
-    const result = await sshExec(agent, 'sudo nginx -s reload 2>&1', l => socket.emit('log', l));
+    const result = await sshExec(agent, `${sudoPrefix(agent)}nginx -s reload 2>&1`, l => socket.emit('log', l));
     socket.emit('done', result);
   });
 
@@ -362,15 +367,16 @@ io.on('connection', (socket) => {
       await ssh.connect(connOpts);
       socket.emit('log', `✅ SSH connected\n`);
       
-      // List conf.d files
-      const listResult = await ssh.execCommand(`ls ${agent.nginxConfigPath}/conf.d/*.conf 2>/dev/null`);
-      const files = listResult.stdout.trim().split('\n').filter(f => f.trim());
+      const sudo = sudoPrefix(agent);
+      // List conf.d files — also grab files one level up (sites-enabled, etc)
+      const listResult = await ssh.execCommand(`ls ${agent.nginxConfigPath}/conf.d/*.conf ${agent.nginxConfigPath}/conf.d/*.nginx ${agent.nginxConfigPath}/*.conf 2>/dev/null`);
+      const files = listResult.stdout.trim().split('\n').filter(f => f.trim() && !f.includes('No such'));
       
       if (!files.length) {
         socket.emit('log', `ℹ️  No .conf files found in ${agent.nginxConfigPath}/conf.d/\n`);
         
         // Fallback: try nginx.conf itself
-        const mainResult = await ssh.execCommand(`cat ${agent.nginxConfigPath}/nginx.conf 2>/dev/null`);
+        const mainResult = await ssh.execCommand(`${sudo}cat ${agent.nginxConfigPath}/nginx.conf 2>/dev/null`);
         if (mainResult.code === 0) {
           const dir = agentConfigDir(agentId);
           fs.writeFileSync(path.join(dir, 'nginx.conf'), mainResult.stdout, 'utf8');
@@ -380,7 +386,7 @@ io.on('connection', (socket) => {
         const dir = agentConfigDir(agentId);
         for (const filePath of files) {
           const fname = path.basename(filePath);
-          const catResult = await ssh.execCommand(`sudo cat ${filePath}`);
+          const catResult = await ssh.execCommand(`${sudo}cat ${filePath}`);
           if (catResult.code === 0) {
             fs.writeFileSync(path.join(dir, fname), catResult.stdout, 'utf8');
             socket.emit('log', `✅ Synced ${fname}\n`);
@@ -407,7 +413,7 @@ io.on('connection', (socket) => {
 
     const result = await sshExec(
       agent,
-      'sudo systemctl is-active nginx && sudo nginx -v 2>&1 && sudo systemctl status nginx --no-pager -l 2>&1 | head -20',
+      `${sudoPrefix(agent)}systemctl is-active nginx && ${sudoPrefix(agent)}nginx -v 2>&1 && ${sudoPrefix(agent)}systemctl status nginx --no-pager -l 2>&1 | head -20`,
       l => socket.emit('log', l)
     );
     socket.emit('done', result);
@@ -421,7 +427,7 @@ app.post('/api/agents/:id/validate', requireAuth, async (req, res) => {
   const agents = readAgents();
   const agent = agents.find(a => a.id === req.params.id);
   if (!agent) return res.status(404).json({ error: 'Agent not found' });
-  const result = await sshExec(agent, 'sudo nginx -t 2>&1');
+  const result = await sshExec(agent, `${sudoPrefix(agent)}nginx -t 2>&1`);
   res.json(result);
 });
 
@@ -429,7 +435,7 @@ app.post('/api/agents/:id/reload', requireAuth, async (req, res) => {
   const agents = readAgents();
   const agent = agents.find(a => a.id === req.params.id);
   if (!agent) return res.status(404).json({ error: 'Agent not found' });
-  const result = await sshExec(agent, 'sudo nginx -s reload 2>&1');
+  const result = await sshExec(agent, `${sudoPrefix(agent)}nginx -s reload 2>&1`);
   res.json(result);
 });
 
@@ -437,7 +443,7 @@ app.get('/api/agents/:id/status', requireAuth, async (req, res) => {
   const agents = readAgents();
   const agent = agents.find(a => a.id === req.params.id);
   if (!agent) return res.status(404).json({ error: 'Agent not found' });
-  const result = await sshExec(agent, 'sudo systemctl is-active nginx 2>&1 && sudo nginx -v 2>&1');
+  const result = await sshExec(agent, `${sudoPrefix(agent)}systemctl is-active nginx 2>&1 && ${sudoPrefix(agent)}nginx -v 2>&1`);
   res.json(result);
 });
 
