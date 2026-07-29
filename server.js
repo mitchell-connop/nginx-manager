@@ -449,16 +449,34 @@ app.post('/api/agents/:id/certs/scan', requireAuth, async (req, res) => {
   if (!agent) return res.status(404).json({ error: 'Agent not found' });
 
   const sudo = sudoPrefix(agent);
-  // Look in common cert locations
-  const scanCmd = [
-    `${sudo}find /etc/ssl/certs /etc/ssl/private /etc/nginx/ssl /etc/nginx/certs /etc/letsencrypt/live`,
-    `-name "*.pem" -o -name "*.crt" -o -name "*.key" 2>/dev/null | head -100`,
-  ].join(' ');
+
+  // Restricted to /etc/ssl/nginx and /etc/letsencrypt (all subdirectories)
+  const scanCmd = `${sudo}find /etc/ssl/nginx /etc/letsencrypt ` +
+    `\\( -name "*.pem" -o -name "*.crt" -o -name "*.cer" -o -name "*.key" \\) ` +
+    `2>/dev/null | sort`;
 
   const result = await sshExec(agent, scanCmd);
   const files  = result.output.trim().split('\n').filter(f => f.trim());
 
-  // Group by directory to suggest cert/key pairs
+  // ── Heuristics to match cert+key pairs ──────────────────────────────────
+  // A file is a "cert" if its basename contains: fullchain, cert, crt, certificate
+  // or the extension is .crt/.cer, and it does NOT look like a key.
+  // A file is a "key" if its basename contains: privkey, key, private.
+  const isCert = f => {
+    const b = path.basename(f).toLowerCase();
+    return !b.includes('key') && !b.includes('private') &&
+      (b.includes('fullchain') || b.includes('cert') || b.includes('crt') ||
+       b.includes('certificate') || b.endsWith('.crt') || b.endsWith('.cer') ||
+       (b.endsWith('.pem') && !b.includes('chain') === false) ||
+       b.endsWith('.pem'));
+  };
+  const isKey = f => {
+    const b = path.basename(f).toLowerCase();
+    return b.includes('privkey') || b.includes('private') || b.includes('.key') ||
+      (b.includes('key') && b.endsWith('.pem'));
+  };
+
+  // Group by directory
   const byDir = {};
   for (const f of files) {
     const d = path.dirname(f);
@@ -466,14 +484,70 @@ app.post('/api/agents/:id/certs/scan', requireAuth, async (req, res) => {
     byDir[d].push(f);
   }
 
-  const suggestions = Object.entries(byDir).map(([dir, files]) => ({
-    dir,
-    certs: files.filter(f => f.match(/\.(pem|crt)$/) && !f.includes('key')),
-    keys:  files.filter(f => f.match(/key\.(pem|key)$/) || f.includes('.key')),
-    files,
-  }));
+  // Build suggestions — prefer fullchain.pem + privkey.pem (Let's Encrypt layout)
+  const suggestions = Object.entries(byDir).map(([dir, dirFiles]) => {
+    const certs = dirFiles.filter(isCert);
+    const keys  = dirFiles.filter(isKey);
 
-  res.json({ files, suggestions });
+    // Best cert: prefer fullchain.pem, then cert.pem, then first cert found
+    const bestCert = certs.find(f => path.basename(f) === 'fullchain.pem')
+      || certs.find(f => path.basename(f).startsWith('cert'))
+      || certs[0];
+
+    // Best key: prefer privkey.pem, then first key found
+    const bestKey = keys.find(f => path.basename(f) === 'privkey.pem')
+      || keys.find(f => path.basename(f).includes('privkey'))
+      || keys[0];
+
+    return { dir, files: dirFiles, certs, keys, bestCert, bestKey };
+  }).filter(s => s.certs.length > 0 || s.keys.length > 0);
+
+  // ── Auto-register valid pairs that aren't already stored ────────────────
+  const autoRegistered = [];
+  if (suggestions.length > 0) {
+    const certDir  = agentCertDir(req.params.id);
+    const metaFile = path.join(certDir, 'certs.json');
+    let stored = [];
+    try { stored = JSON.parse(fs.readFileSync(metaFile, 'utf8')); } catch {}
+
+    for (const sg of suggestions) {
+      if (!sg.bestCert || !sg.bestKey) continue;
+
+      // Skip if this cert path is already registered
+      const alreadyExists = stored.some(c =>
+        c.remoteCertPath === sg.bestCert && c.remoteKeyPath === sg.bestKey
+      );
+      if (alreadyExists) continue;
+
+      // Derive a readable label from the directory name
+      //  /etc/letsencrypt/live/example.com → "example.com"
+      //  /etc/ssl/nginx/mysite             → "mysite"
+      const dirParts = sg.dir.split('/').filter(Boolean);
+      const label    = dirParts[dirParts.length - 1] || sg.dir;
+
+      const newCert = {
+        id:             uuidv4(),
+        label,
+        remoteCertPath: sg.bestCert,
+        remoteKeyPath:  sg.bestKey,
+        remoteChainPath: sg.certs.find(f => path.basename(f).includes('chain') && f !== sg.bestCert) || null,
+        localCert:      null,
+        localKey:       null,
+        localChain:     null,
+        createdAt:      new Date().toISOString(),
+        remoteOnly:     true,
+        autoDiscovered: true,
+      };
+      stored.push(newCert);
+      autoRegistered.push(newCert);
+    }
+
+    if (autoRegistered.length > 0) {
+      fs.writeFileSync(metaFile, JSON.stringify(stored, null, 2));
+    }
+  }
+
+  res.json({ files, suggestions, autoRegistered });
 });
 
 // Push a locally-stored cert to the remote server
@@ -686,6 +760,223 @@ app.post('/api/agents/:id/sites/preview', requireAuth, (req, res) => {
   } catch (err) {
     res.status(400).json({ error: err.message });
   }
+});
+
+// ---------------------------------------------------------------------------
+// Import conf.d files from the remote server into the Visual Builder
+// ---------------------------------------------------------------------------
+// Lightweight nginx conf parser — extracts the key fields we care about.
+function parseNginxConf(filename, raw) {
+  const text  = raw.replace(/#[^\n]*/g, '');   // strip comments
+  const lines = text.replace(/\r/g, '').split('\n').map(l => l.trim()).filter(Boolean);
+
+  // Helper: grab first match of a directive inside a block string
+  const directive = (block, name) => {
+    const m = block.match(new RegExp(`(?:^|\\n)\\s*${name}\\s+([^;{\\n]+);`));
+    return m ? m[1].trim() : null;
+  };
+
+  // Split into top-level upstream{} blocks and server{} blocks
+  const upstreamBlocks = [];
+  const serverBlocks   = [];
+
+  let depth = 0, blockStart = -1, blockType = null;
+  const joined = lines.join('\n');
+
+  for (let i = 0; i < joined.length; i++) {
+    const ch = joined[i];
+    if (ch === '{') {
+      if (depth === 0) {
+        // Grab the keyword before this {
+        const before = joined.slice(Math.max(0, i - 80), i).trim();
+        const typeMatch = before.match(/(upstream|server)\s*\S*\s*$/i);
+        blockType  = typeMatch ? typeMatch[1].toLowerCase() : 'unknown';
+        blockStart = i + 1;
+      }
+      depth++;
+    } else if (ch === '}') {
+      depth--;
+      if (depth === 0 && blockStart >= 0) {
+        const block = joined.slice(blockStart, i).trim();
+        if (blockType === 'upstream') upstreamBlocks.push(block);
+        else if (blockType === 'server') serverBlocks.push(block);
+        blockStart = -1; blockType = null;
+      }
+    }
+  }
+
+  const sites = [];
+
+  for (const sb of serverBlocks) {
+    // Listen port
+    const listenMatch = sb.match(/listen\s+([\d.]*:?(\d+))\s*([^;]*)?;/i);
+    const listenRaw   = listenMatch ? listenMatch[1] : '80';
+    const isSSL       = sb.includes('ssl') || /listen\s+[^;]*ssl/.test(sb);
+    const listenPort  = parseInt(listenRaw.replace(/.*:/, '')) || (isSSL ? 443 : 80);
+
+    // Skip pure HTTP→HTTPS redirects (return 301 https)
+    if (/return\s+301\s+https/.test(sb) && !isSSL) continue;
+
+    const serverName = directive(sb, 'server_name') || '';
+
+    // Detect type
+    let type       = 'proxy';
+    let upstream   = [];
+    let staticRoot = '';
+    let redirectTo = '';
+
+    const proxyPass  = directive(sb, 'proxy_pass');
+    const root       = directive(sb, 'root');
+    const returnDir  = directive(sb, 'return');
+
+    if (returnDir && /https?:\/\//.test(returnDir)) {
+      type = 'redirect';
+      redirectTo = returnDir.replace(/^3\d\d\s+/, '').trim();
+    } else if (proxyPass) {
+      type = 'proxy';
+      // proxyPass may be http://upstream_name or http://host:port
+      const dest = proxyPass.replace(/^https?:\/\//, '');
+      // Check if it references an upstream block
+      const upBlock = upstreamBlocks.find(ub => {
+        const nm = joined.slice(0, joined.indexOf(ub) - 1)
+          .split('\n').reverse().find(l => l.trim().startsWith('upstream'));
+        return nm && nm.includes(dest.split('/')[0]);
+      });
+      if (upBlock) {
+        upstream = [...upBlock.matchAll(/server\s+([^;]+);/g)].map(m => m[1].trim());
+      } else {
+        upstream = [dest.split('/')[0]];
+      }
+    } else if (root) {
+      type = 'static';
+      staticRoot = root;
+    }
+
+    // SSL cert paths
+    const certFile = directive(sb, 'ssl_certificate(?!_key)') ||
+                     (sb.match(/ssl_certificate\s+(?!_key)([^;]+);/) || [])[1]?.trim() || '';
+    const keyFile  = directive(sb, 'ssl_certificate_key') || '';
+    const hsts     = /Strict-Transport-Security/.test(sb);
+
+    // Load balance method
+    let lbMethod = 'round_robin';
+    const lbBlock = upstreamBlocks[0] || '';
+    if (/least_conn/.test(lbBlock))  lbMethod = 'least_conn';
+    if (/ip_hash/.test(lbBlock))     lbMethod = 'ip_hash';
+
+    // Proxy timeout
+    const timeoutMatch = sb.match(/proxy_read_timeout\s+(\d+)/);
+    const proxyTimeout = timeoutMatch ? parseInt(timeoutMatch[1]) : 60;
+
+    const siteName = serverName
+      ? serverName.split(/\s+/)[0].replace(/[^a-zA-Z0-9._-]/g, '')
+      : filename.replace(/\.conf$/, '');
+
+    sites.push({
+      id:             uuidv4(),
+      name:           siteName || filename.replace(/\.conf$/, ''),
+      type,
+      serverName,
+      listenPort,
+      upstream,
+      lbMethod,
+      staticRoot,
+      redirectTo,
+      ssl:            isSSL && !!(certFile || keyFile),
+      certId:         null,
+      certFile:       certFile.trim(),
+      keyFile:        keyFile.trim(),
+      hsts,
+      proxyTimeout,
+      proxyBuffering: true,
+      extraDirectives: '',
+      enabled:        true,
+      createdAt:      new Date().toISOString(),
+      updatedAt:      new Date().toISOString(),
+      importedFrom:   filename,
+    });
+  }
+
+  return sites;
+}
+
+app.post('/api/agents/:id/sites/import', requireAuth, async (req, res) => {
+  const agent = readAgents().find(a => a.id === req.params.id);
+  if (!agent) return res.status(404).json({ error: 'Agent not found' });
+
+  const sudo       = sudoPrefix(agent);
+  const confDir    = `${agent.nginxConfigPath}/conf.d`;
+
+  // List all .conf files in conf.d
+  const listResult = await sshExec(agent, `ls ${confDir}/*.conf 2>/dev/null`);
+  const confFiles  = listResult.output.trim().split('\n')
+    .map(f => f.trim()).filter(f => f.endsWith('.conf'));
+
+  if (!confFiles.length) {
+    return res.json({ imported: [], skipped: [], message: `No .conf files found in ${confDir}` });
+  }
+
+  // Load existing sites so we can skip duplicates
+  const sitesDir = agentSitesDir(req.params.id);
+  const existing = fs.readdirSync(sitesDir)
+    .filter(f => f.endsWith('.json'))
+    .flatMap(f => {
+      try { return [JSON.parse(fs.readFileSync(path.join(sitesDir, f), 'utf8'))]; }
+      catch { return []; }
+    });
+
+  const imported = [];
+  const skipped  = [];
+
+  for (const remotePath of confFiles) {
+    const fname = path.basename(remotePath);
+
+    // Read the conf file content via SSH
+    const catResult = await sshExec(agent, `${sudo}cat ${remotePath}`);
+    if (catResult.code !== 0) {
+      skipped.push({ file: fname, reason: `Could not read: ${catResult.output.trim()}` });
+      continue;
+    }
+
+    // Parse the conf into site definition(s)
+    let sites;
+    try { sites = parseNginxConf(fname, catResult.output); }
+    catch (err) {
+      skipped.push({ file: fname, reason: `Parse error: ${err.message}` });
+      continue;
+    }
+
+    if (!sites.length) {
+      skipped.push({ file: fname, reason: 'No server blocks found (may be a redirect-only block)' });
+      continue;
+    }
+
+    for (const site of sites) {
+      // Skip if a site with the same name + importedFrom is already stored
+      const dup = existing.find(e =>
+        e.importedFrom === fname && e.serverName === site.serverName
+      );
+      if (dup) {
+        skipped.push({ file: fname, reason: `Already imported (${site.name})` });
+        continue;
+      }
+
+      // Write site JSON
+      const siteFile = path.join(sitesDir, `${site.id}.json`);
+      fs.writeFileSync(siteFile, JSON.stringify(site, null, 2));
+
+      // Also store a local copy of the raw conf (don't overwrite if it already exists)
+      const localConf = path.join(agentConfigDir(req.params.id), fname);
+      if (!fs.existsSync(localConf)) {
+        fs.writeFileSync(localConf, catResult.output, 'utf8');
+      }
+
+      imported.push(site);
+      existing.push(site);   // prevent double-import within the same request
+    }
+  }
+
+  res.json({ imported, skipped });
 });
 
 // ---------------------------------------------------------------------------
