@@ -281,7 +281,7 @@ app.get('/api/agents', requireAuth, (req, res) => {
 });
 
 app.post('/api/agents', requireAuth, (req, res) => {
-  const { name, host, sshPort, sshUser, sshPass, sshKeyPath, nginxConfigPath, description } = req.body;
+  const { name, host, sshPort, sshUser, sshPass, sshKeyPath, nginxConfigPath, description, group } = req.body;
   if (!name || !host || !sshUser) return res.status(400).json({ error: 'name, host, sshUser required' });
   const agents = readAgents();
   const agent = {
@@ -289,6 +289,7 @@ app.post('/api/agents', requireAuth, (req, res) => {
     sshPort: sshPort || 22, sshUser,
     sshPass: sshPass || '', sshKeyPath: sshKeyPath || '',
     nginxConfigPath: nginxConfigPath || '/etc/nginx',
+    group: group || '',
     description: description || '',
     createdAt: new Date().toISOString(),
   };
