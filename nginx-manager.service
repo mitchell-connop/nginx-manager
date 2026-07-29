@@ -1,0 +1,18 @@
+[Unit]
+Description=Nginx Manager — Web GUI for nginx config management
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/opt/nginx-manager
+EnvironmentFile=/opt/nginx-manager/.env
+ExecStart=/usr/bin/node /opt/nginx-manager/server.js
+Restart=always
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
