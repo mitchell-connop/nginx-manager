@@ -20,6 +20,7 @@
       --purple: #9b59b6;
       --text: #e8eaf2;
       --text-dim: #8b90a8;
+      --surface3: #313650;
       --font: 'Segoe UI', system-ui, -apple-system, sans-serif;
       --mono: 'Cascadia Code', 'Fira Code', 'Consolas', monospace;
       --radius: 10px;
@@ -47,18 +48,74 @@
 
     /* ── SIDEBAR ── */
     aside { width: 260px; background: var(--surface); border-right: 1px solid var(--border); display: flex; flex-direction: column; overflow-y: auto; }
-    .sidebar-section { padding: 16px 16px 8px; }
-    .sidebar-section h3 { font-size: .75rem; text-transform: uppercase; letter-spacing: 1px; color: var(--text-dim); }
+    .sidebar-section { padding: 12px 16px 4px; display: flex; align-items: center; justify-content: space-between; }
+    .sidebar-section h3 { font-size: .72rem; text-transform: uppercase; letter-spacing: 1px; color: var(--text-dim); }
     .agent-list { padding: 0 8px 8px; }
-    .agent-item { padding: 10px 12px; border-radius: 8px; cursor: pointer; display: flex; align-items: center; gap: 10px; margin-bottom: 4px; transition: background .15s; }
+
+    /* ── GROUPS ── */
+    .group-block { margin-bottom: 4px; }
+    .group-header {
+      display: flex; align-items: center; gap: 6px;
+      padding: 6px 10px 6px 8px; margin: 0 0 2px;
+      border-radius: 7px; cursor: pointer;
+      user-select: none; transition: background .15s;
+      position: relative;
+    }
+    .group-header:hover { background: var(--surface2); }
+    .group-header:hover .group-menu-btn { opacity: 1; }
+    .group-chevron {
+      font-size: .65rem; color: var(--text-dim);
+      transition: transform .2s; flex-shrink: 0;
+      display: inline-block;
+    }
+    .group-chevron.collapsed { transform: rotate(-90deg); }
+    .group-label {
+      font-size: .75rem; font-weight: 600;
+      text-transform: uppercase; letter-spacing: .8px;
+      color: var(--text-dim); flex: 1;
+      white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    }
+    .group-count {
+      font-size: .68rem; color: var(--text-dim);
+      background: var(--surface3); border-radius: 10px;
+      padding: 1px 6px; flex-shrink: 0;
+    }
+    .group-menu-btn {
+      opacity: 0; background: none; border: none;
+      color: var(--text-dim); font-size: .8rem;
+      padding: 2px 4px; border-radius: 4px;
+      cursor: pointer; transition: opacity .15s, color .15s;
+      flex-shrink: 0;
+    }
+    .group-menu-btn:hover { color: var(--text); }
+    .group-items { overflow: hidden; transition: max-height .2s ease; }
+    .group-items.collapsed { display: none; }
+
+    /* ── CONTEXT MENU ── */
+    .ctx-menu {
+      position: fixed; z-index: 500;
+      background: var(--surface); border: 1px solid var(--border);
+      border-radius: 8px; padding: 4px;
+      box-shadow: 0 8px 24px rgba(0,0,0,.4);
+      min-width: 160px;
+    }
+    .ctx-item {
+      padding: 8px 14px; font-size: .85rem; cursor: pointer;
+      border-radius: 5px; display: flex; align-items: center; gap: 8px;
+      transition: background .1s;
+    }
+    .ctx-item:hover { background: var(--surface2); }
+    .ctx-item.danger { color: var(--danger); }
+
+    .agent-item { padding: 8px 10px 8px 14px; border-radius: 8px; cursor: pointer; display: flex; align-items: center; gap: 10px; margin-bottom: 2px; transition: background .15s; }
     .agent-item:hover { background: var(--surface2); }
     .agent-item.active { background: rgba(0,212,170,.12); border: 1px solid rgba(0,212,170,.25); }
     .agent-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--text-dim); flex-shrink: 0; }
     .agent-dot.online { background: var(--success); box-shadow: 0 0 6px var(--success); }
     .agent-dot.offline { background: var(--danger); }
     .agent-item-info { flex: 1; min-width: 0; }
-    .agent-item-name { font-size: .9rem; font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-    .agent-item-host { font-size: .75rem; color: var(--text-dim); }
+    .agent-item-name { font-size: .88rem; font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .agent-item-host { font-size: .73rem; color: var(--text-dim); }
 
     /* ── MAIN ── */
     main { flex: 1; overflow-y: auto; padding: 24px; }
@@ -266,7 +323,10 @@
 
   <div class="main-layout">
     <aside>
-      <div class="sidebar-section"><h3>Nginx Servers</h3></div>
+      <div class="sidebar-section">
+        <h3>Nginx Servers</h3>
+        <button class="btn-secondary btn-xs" onclick="openAddGroup()" title="New group" style="padding:2px 7px;font-size:.7rem">＋ Group</button>
+      </div>
       <div class="agent-list" id="agent-list">
         <div class="empty-state"><div class="icon">🖥️</div><p>No servers yet.</p></div>
       </div>
@@ -402,6 +462,12 @@
     <div class="form-group"><label>SSH Password</label><input type="password" id="f-pass" placeholder="password" /></div>
     <div class="form-group"><label>SSH Key Path (on manager)</label><input type="text" id="f-key" placeholder="/root/.ssh/id_rsa (optional)" /></div>
     <div class="form-group"><label>Nginx Config Path</label><input type="text" id="f-cfg" value="/etc/nginx" /></div>
+    <div class="form-group">
+      <label>Group</label>
+      <input type="text" id="f-group" placeholder="e.g. Production, DMZ, Staging" list="group-datalist" autocomplete="off" />
+      <datalist id="group-datalist"></datalist>
+      <div class="form-hint">Optional — groups servers in the sidebar. Leave blank for Ungrouped.</div>
+    </div>
     <div class="form-group"><label>Description</label><input type="text" id="f-desc" placeholder="Primary load balancer" /></div>
     <div class="modal-actions">
       <button class="btn-secondary" onclick="closeAgentModal()">Cancel</button>
@@ -727,15 +793,69 @@ async function loadAgents() {
 
 function renderAgentList() {
   const list = document.getElementById('agent-list');
-  if (!S.agents.length) { list.innerHTML = `<div class="empty-state"><div class="icon">🖥️</div><p>No servers yet.</p></div>`; return; }
-  list.innerHTML = S.agents.map(a => `
-    <div class="agent-item ${a.id === S.currentAgentId ? 'active' : ''}" onclick="selectAgent('${a.id}')">
-      <div class="agent-dot" id="dot-${a.id}"></div>
-      <div class="agent-item-info">
-        <div class="agent-item-name">${esc(a.name)}</div>
-        <div class="agent-item-host">${esc(a.host)}</div>
-      </div>
-    </div>`).join('');
+  if (!S.agents.length) {
+    list.innerHTML = `<div class="empty-state"><div class="icon">🖥️</div><p>No servers yet.</p></div>`;
+    return;
+  }
+
+  // Build ordered group list — custom order from localStorage, then alpha, Ungrouped last
+  const groupOrder = getGroupOrder();
+  const groupMap   = {};
+  S.agents.forEach(a => {
+    const g = (a.group || '').trim() || '__ungrouped__';
+    if (!groupMap[g]) groupMap[g] = [];
+    groupMap[g].push(a);
+  });
+
+  // Sort groups: stored order first, new groups alpha, ungrouped last
+  const allGroups = Object.keys(groupMap);
+  allGroups.sort((a, b) => {
+    if (a === '__ungrouped__') return 1;
+    if (b === '__ungrouped__') return -1;
+    const ia = groupOrder.indexOf(a), ib = groupOrder.indexOf(b);
+    if (ia !== -1 && ib !== -1) return ia - ib;
+    if (ia !== -1) return -1;
+    if (ib !== -1) return  1;
+    return a.localeCompare(b);
+  });
+
+  // Save updated order
+  setGroupOrder(allGroups.filter(g => g !== '__ungrouped__'));
+
+  const collapsed = getCollapsed();
+
+  list.innerHTML = allGroups.map(gKey => {
+    const agents  = groupMap[gKey];
+    const label   = gKey === '__ungrouped__' ? 'Ungrouped' : gKey;
+    const isCollapsed = collapsed.has(gKey);
+
+    const agentItems = agents.map(a => `
+      <div class="agent-item ${a.id === S.currentAgentId ? 'active' : ''}" onclick="selectAgent('${a.id}')">
+        <div class="agent-dot" id="dot-${a.id}"></div>
+        <div class="agent-item-info">
+          <div class="agent-item-name">${esc(a.name)}</div>
+          <div class="agent-item-host">${esc(a.host)}</div>
+        </div>
+      </div>`).join('');
+
+    return `
+      <div class="group-block" data-group="${esc(gKey)}">
+        <div class="group-header" onclick="toggleGroup('${esc(gKey)}')">
+          <span class="group-chevron ${isCollapsed ? 'collapsed' : ''}">▾</span>
+          <span class="group-label">${esc(label)}</span>
+          <span class="group-count">${agents.length}</span>
+          ${gKey !== '__ungrouped__' ? `
+            <button class="group-menu-btn" onclick="event.stopPropagation();showGroupMenu(event,'${esc(gKey)}')" title="Group options">⋯</button>
+          ` : ''}
+        </div>
+        <div class="group-items ${isCollapsed ? 'collapsed' : ''}" id="gi-${cssId(gKey)}">
+          ${agentItems}
+        </div>
+      </div>`;
+  }).join('');
+
+  // Populate datalist for the Add Server modal
+  updateGroupDatalist();
 }
 
 async function selectAgent(id) {
@@ -769,12 +889,14 @@ async function deleteCurrentAgent() {
 
 // Add/Edit agent modal
 let _editAgentId = null;
-function openAddAgent() {
+function openAddAgent(presetGroup = '') {
   _editAgentId = null;
   document.getElementById('agent-modal-title').textContent = '➕ Add Nginx Server';
   ['name','host','user','pass','key','desc'].forEach(f => { const el = document.getElementById('f-'+f); if (el) el.value = ''; });
-  document.getElementById('f-port').value = '22';
-  document.getElementById('f-cfg').value  = '/etc/nginx';
+  document.getElementById('f-port').value  = '22';
+  document.getElementById('f-cfg').value   = '/etc/nginx';
+  document.getElementById('f-group').value = presetGroup;
+  updateGroupDatalist();
   document.getElementById('agent-modal').classList.add('open');
 }
 function closeAgentModal() { document.getElementById('agent-modal').classList.remove('open'); }
@@ -787,6 +909,7 @@ async function saveAgent() {
     sshPass: document.getElementById('f-pass').value,
     sshKeyPath: document.getElementById('f-key').value.trim(),
     nginxConfigPath: document.getElementById('f-cfg').value.trim() || '/etc/nginx',
+    group: document.getElementById('f-group').value.trim(),
     description: document.getElementById('f-desc').value.trim(),
   };
   if (!data.name || !data.host || !data.sshUser) { toast('Name, host, SSH user required', 'error'); return; }
@@ -796,6 +919,139 @@ async function saveAgent() {
   closeAgentModal();
   await loadAgents();
   if (res?.id) { toast(`${_editAgentId ? 'Updated' : 'Added'} ${res.name}`, 'success'); selectAgent(res.id); }
+}
+
+// ─── GROUPS ───────────────────────────────────────────
+// localStorage keys
+const LS_COLLAPSED  = 'nm_groups_collapsed';
+const LS_ORDER      = 'nm_groups_order';
+
+function getCollapsed() {
+  try { return new Set(JSON.parse(localStorage.getItem(LS_COLLAPSED) || '[]')); }
+  catch { return new Set(); }
+}
+function setCollapsed(set) {
+  localStorage.setItem(LS_COLLAPSED, JSON.stringify([...set]));
+}
+function getGroupOrder() {
+  try { return JSON.parse(localStorage.getItem(LS_ORDER) || '[]'); }
+  catch { return []; }
+}
+function setGroupOrder(arr) {
+  localStorage.setItem(LS_ORDER, JSON.stringify(arr));
+}
+
+// Safe CSS id from group key
+function cssId(gKey) {
+  return gKey.replace(/[^a-zA-Z0-9_-]/g, '_');
+}
+
+function toggleGroup(gKey) {
+  const col = getCollapsed();
+  col.has(gKey) ? col.delete(gKey) : col.add(gKey);
+  setCollapsed(col);
+  // Animate in-place without full re-render
+  const items   = document.getElementById(`gi-${cssId(gKey)}`);
+  const chevron = items?.previousElementSibling?.querySelector('.group-chevron');
+  if (items)   items.classList.toggle('collapsed', col.has(gKey));
+  if (chevron) chevron.classList.toggle('collapsed', col.has(gKey));
+}
+
+function updateGroupDatalist() {
+  const dl = document.getElementById('group-datalist');
+  if (!dl) return;
+  const groups = [...new Set(S.agents.map(a => a.group).filter(Boolean))].sort();
+  dl.innerHTML = groups.map(g => `<option value="${esc(g)}">`).join('');
+}
+
+// ── Group context menu ─────────────────────────────────
+let _ctxMenu = null;
+function closeCtxMenu() {
+  if (_ctxMenu) { _ctxMenu.remove(); _ctxMenu = null; }
+}
+document.addEventListener('click', closeCtxMenu);
+document.addEventListener('keydown', e => { if (e.key === 'Escape') closeCtxMenu(); });
+
+function showGroupMenu(event, gKey) {
+  closeCtxMenu();
+  const menu = document.createElement('div');
+  menu.className = 'ctx-menu';
+  menu.innerHTML = `
+    <div class="ctx-item" onclick="renameGroup('${esc(gKey)}')">✏️ Rename group</div>
+    <div class="ctx-item" onclick="openAddAgent('${esc(gKey)}')">＋ Add server here</div>
+    <div class="ctx-item" onclick="moveGroupUp('${esc(gKey)}')">⬆ Move up</div>
+    <div class="ctx-item" onclick="moveGroupDown('${esc(gKey)}')">⬇ Move down</div>
+    <div class="ctx-item danger" onclick="ungroup('${esc(gKey)}')">🗑 Ungroup all servers</div>
+  `;
+  // Position near the button
+  const rect = event.target.getBoundingClientRect();
+  menu.style.top  = `${rect.bottom + 4}px`;
+  menu.style.left = `${Math.min(rect.left, window.innerWidth - 180)}px`;
+  document.body.appendChild(menu);
+  _ctxMenu = menu;
+  event.stopPropagation();
+}
+
+async function renameGroup(gKey) {
+  closeCtxMenu();
+  const newName = prompt(`Rename group "${gKey}" to:`, gKey);
+  if (!newName || newName.trim() === gKey) return;
+  const name = newName.trim();
+  // Update all agents in this group
+  const toUpdate = S.agents.filter(a => (a.group || '').trim() === gKey);
+  await Promise.all(toUpdate.map(a =>
+    apiFetch(`/api/agents/${a.id}`, { method: 'PUT', body: { group: name } })
+  ));
+  // Update group order
+  const order = getGroupOrder().map(g => g === gKey ? name : g);
+  setGroupOrder(order);
+  // Update collapsed key
+  const col = getCollapsed();
+  if (col.has(gKey)) { col.delete(gKey); col.add(name); setCollapsed(col); }
+  await loadAgents();
+  toast(`Renamed group to "${name}"`, 'success');
+}
+
+async function ungroup(gKey) {
+  closeCtxMenu();
+  if (!confirm(`Remove all servers from group "${gKey}"? (Servers remain, group is removed)`)) return;
+  const toUpdate = S.agents.filter(a => (a.group || '').trim() === gKey);
+  await Promise.all(toUpdate.map(a =>
+    apiFetch(`/api/agents/${a.id}`, { method: 'PUT', body: { group: '' } })
+  ));
+  await loadAgents();
+  toast(`Ungrouped "${gKey}"`, 'info');
+}
+
+function moveGroupUp(gKey) {
+  closeCtxMenu();
+  const order = getGroupOrder();
+  const idx = order.indexOf(gKey);
+  if (idx <= 0) return;
+  [order[idx - 1], order[idx]] = [order[idx], order[idx - 1]];
+  setGroupOrder(order);
+  renderAgentList();
+}
+
+function moveGroupDown(gKey) {
+  closeCtxMenu();
+  const order = getGroupOrder();
+  const idx = order.indexOf(gKey);
+  if (idx === -1 || idx >= order.length - 1) return;
+  [order[idx], order[idx + 1]] = [order[idx + 1], order[idx]];
+  setGroupOrder(order);
+  renderAgentList();
+}
+
+function openAddGroup() {
+  const name = prompt('New group name:');
+  if (!name || !name.trim()) return;
+  const order = getGroupOrder();
+  if (!order.includes(name.trim())) {
+    order.push(name.trim());
+    setGroupOrder(order);
+  }
+  openAddAgent(name.trim());
 }
 
 // ─── SITES ────────────────────────────────────────────
