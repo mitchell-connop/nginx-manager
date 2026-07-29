@@ -126,8 +126,9 @@ function siteToNginxConf(site, agent) {
   const ssl   = site.ssl && site.certFile;
   const sudo  = sudoPrefix(agent);
 
+  const upstreamName = (site.id || site.name || 'backend').replace(/[^a-zA-Z0-9_]/g,'_');
   if (site.upstream && site.upstream.length > 1) {
-    lines.push(`upstream ${site.id}_upstream {`);
+    lines.push(`upstream ${upstreamName} {`);
     if (site.lbMethod && site.lbMethod !== 'round_robin') lines.push(`    ${site.lbMethod};`);
     for (const up of site.upstream) {
       lines.push(`    server ${up};`);
@@ -137,7 +138,7 @@ function siteToNginxConf(site, agent) {
   }
 
   const upstreamTarget = (site.upstream && site.upstream.length > 1)
-    ? `http://${site.id}_upstream`
+    ? `http://${upstreamName}`
     : (site.upstream && site.upstream[0]) ? `http://${site.upstream[0]}` : null;
 
   // Main server block
