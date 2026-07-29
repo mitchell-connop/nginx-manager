@@ -33,7 +33,13 @@ const { v4: uuidv4 } = require('uuid');
 // ---------------------------------------------------------------------------
 const PORT           = process.env.PORT || 3000;
 const SESSION_SECRET = process.env.SESSION_SECRET || 'change-me';
-const ADMIN_PASS     = process.env.ADMIN_PASSWORD || 'admin';
+const ADMIN_PASS = process.env.ADMIN_PASSWORD;
+if (!ADMIN_PASS) {
+  console.error('[nginx-manager] ERROR: ADMIN_PASSWORD is not set in .env');
+  console.error('[nginx-manager] Please set ADMIN_PASSWORD in your .env file before starting.');
+  console.error('[nginx-manager] Example:  echo "ADMIN_PASSWORD=YourSecurePassword" >> .env');
+  process.exit(1);
+}
 const DATA_DIR       = path.join(__dirname, 'data');
 const AGENTS_FILE    = path.join(DATA_DIR, 'agents.json');
 const CONFIGS_DIR    = path.join(DATA_DIR, 'configs');

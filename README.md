@@ -27,11 +27,11 @@ Built for ConnopNetworking homelab infrastructure.
 ### Setup
 
 ```bash
-git clone https://github.com/YOUR_USERNAME/nginx-manager.git
+git clone https://github.com/mitchell-connop/nginx-manager.git
 cd nginx-manager
 npm install
 cp .env.example .env
-# Edit .env — set PORT and ADMIN_PASSWORD
+# Edit .env — set ADMIN_PASSWORD (required) and PORT
 node server.js
 ```
 
@@ -52,8 +52,8 @@ Edit `.env`:
 | Variable | Default | Description |
 |---|---|---|
 | `PORT` | `3000` | HTTP port |
-| `SESSION_SECRET` | (required) | Session cookie secret |
-| `ADMIN_PASSWORD` | `admin` | Login password |
+| `SESSION_SECRET` | (required) | Session cookie secret — set a long random string |
+| `ADMIN_PASSWORD` | **(required — no default)** | Login password — server will refuse to start without this |
 
 ## Nginx Agent SSH Setup
 
