@@ -1002,11 +1002,24 @@ async function regenerateToken() {
   const res = await apiFetch(`/api/agents/${a.id}/token`, { method: 'POST' });
   if (res?.token) showSetup(a.name, res.setup, res.token);
 }
+// navigator.clipboard only exists on HTTPS/localhost; the UI is usually plain HTTP on the LAN,
+// so fall back to selecting the field and execCommand('copy').
 function copyText(id) {
   const el = document.getElementById(id);
-  navigator.clipboard.writeText(el.value).then(
-    () => toast('Copied', 'success'),
-    () => { el.select(); toast('Press Ctrl+C to copy', 'info'); });
+  const fallback = () => {
+    el.focus();
+    el.select();
+    el.setSelectionRange(0, el.value.length);
+    let ok = false;
+    try { ok = document.execCommand('copy'); } catch {}
+    if (ok) toast('Copied', 'success');
+    else toast('Selected — press Ctrl+C to copy', 'info');
+  };
+  if (navigator.clipboard && window.isSecureContext) {
+    navigator.clipboard.writeText(el.value).then(() => toast('Copied', 'success'), fallback);
+  } else {
+    fallback();
+  }
 }
 
 // ─── GROUPS ───────────────────────────────────────────
