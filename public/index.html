@@ -384,9 +384,12 @@
           <div class="section-header">
             <span class="section-title">Certificates</span>
             <div style="display:flex;gap:8px">
-              <button class="btn-primary btn-sm"   onclick="openUploadCert()">⬆ Upload Cert</button>
+              <button class="btn-secondary btn-sm" onclick="openUploadCert()">⬆ Upload Cert</button>
+              <button class="btn-primary btn-sm"   onclick="openManagedCertModal()">＋ Request Certificate</button>
             </div>
           </div>
+          <div id="managed-certs"></div>
+          <div class="section-header" style="margin-top:18px"><span class="section-title">On this server</span></div>
           <div class="card-list" id="certs-list"></div>
         </div>
 
@@ -693,6 +696,89 @@
   </div>
 </div>
 
+<!-- ─── MANAGED CERTIFICATE MODAL ─── -->
+<div class="modal-backdrop" id="mc-modal">
+  <div class="modal modal-wide">
+    <h3 id="mc-title">🔄 Request Certificate</h3>
+    <p style="font-size:.82rem;color:var(--text-dim);margin:-6px 0 16px">
+      Issued once on nginx-manager, deployed to every selected server through its agent (nginx -t, reload, automatic rollback),
+      and renewed automatically.
+    </p>
+    <div class="form-row">
+      <div class="form-group"><label>Name <span class="req">*</span></label><input type="text" id="mc-name" placeholder="example.com" oninput="mcDefaultPaths()" /></div>
+      <div class="form-group"><label>Certificate source</label><select id="mc-source" onchange="mcSourceChange()"></select></div>
+    </div>
+    <div class="form-hint" id="mc-source-hint" style="margin:-8px 0 12px"></div>
+
+    <div id="mc-acme">
+      <div class="form-group"><label>Domains <span class="req">*</span></label>
+        <input type="text" id="mc-domains" placeholder="example.com *.example.com" />
+        <div class="form-hint">Space or comma separated. Wildcards (<code>*.example.com</code>) work — validation is by DNS.</div></div>
+      <div class="form-row">
+        <div class="form-group"><label>Contact email</label><input type="email" id="mc-email" placeholder="expiry notices from the CA (optional)" /></div>
+        <div class="form-group"><label>Key type</label>
+          <select id="mc-keytype"><option value="ecdsa">ECDSA P-256 (recommended)</option><option value="rsa">RSA 2048</option></select></div>
+      </div>
+      <div class="form-group" id="mc-directory-wrap"><label>ACME directory URL</label><input type="text" id="mc-directory" /></div>
+      <div class="form-row" id="mc-eab-wrap">
+        <div class="form-group"><label>EAB key ID</label><input type="text" id="mc-eab-kid" /></div>
+        <div class="form-group"><label>EAB HMAC key</label><input type="password" id="mc-eab-hmac" autocomplete="new-password" /></div>
+      </div>
+      <div style="border-top:1px solid var(--border);padding-top:12px;margin-top:4px">
+        <div class="form-row">
+          <div class="form-group"><label>DNS provider (DNS-01 validation)</label><select id="mc-dns" onchange="mcRenderDnsFields()"></select></div>
+          <div class="form-group"><label>DNS propagation wait (s)</label><input type="number" id="mc-propagation" value="30" min="5" max="600" /></div>
+        </div>
+        <div id="mc-dns-fields"></div>
+      </div>
+    </div>
+
+    <div id="mc-acm" style="display:none">
+      <div class="form-group"><label>ACM certificate ARN <span class="req">*</span></label>
+        <input type="text" id="mc-arn" placeholder="arn:aws:acm:ap-southeast-2:123456789012:certificate/…" /></div>
+      <div class="form-row">
+        <div class="form-group"><label>Access key ID</label><input type="text" id="mc-aws-key" placeholder="(blank = instance role / environment)" /></div>
+        <div class="form-group"><label>Secret access key</label><input type="password" id="mc-aws-secret" autocomplete="new-password" /></div>
+      </div>
+    </div>
+
+    <div style="border-top:1px solid var(--border);padding-top:12px;margin-top:4px">
+      <div class="form-group"><label>Deploy to</label><div id="mc-targets" style="display:flex;flex-wrap:wrap;gap:10px"></div></div>
+      <div class="form-row">
+        <div class="form-group"><label>Certificate path on servers</label><input type="text" id="mc-certpath" /></div>
+        <div class="form-group"><label>Key path on servers</label><input type="text" id="mc-keypath" /></div>
+      </div>
+      <div class="form-row">
+        <div class="form-group"><label>Renew when fewer than (days) left</label><input type="number" id="mc-renewdays" value="30" min="1" max="120" /></div>
+        <div class="form-group"></div>
+      </div>
+      <div class="form-hint">Paths must be inside the agents' <code>allowed_directories</code> (default <code>/etc/nginx/ssl/&lt;name&gt;/</code>).
+        Secrets are stored only on the manager (data/cert-secrets.json, mode 600) and are never shown again.</div>
+    </div>
+
+    <div class="modal-actions">
+      <button class="btn-secondary" onclick="document.getElementById('mc-modal').classList.remove('open')">Cancel</button>
+      <button class="btn-primary" id="mc-save" onclick="mcSave()">🔄 Save &amp; Issue</button>
+    </div>
+  </div>
+</div>
+
+<!-- ─── USE MANAGED CERT FOR SITES ─── -->
+<div class="modal-backdrop" id="mc-switch-modal">
+  <div class="modal">
+    <h3>🔀 Use <span id="mcs-name"></span> for sites</h3>
+    <p style="font-size:.85rem;color:var(--text-dim);margin-bottom:14px">
+      Every <code>ssl_certificate</code> / <code>ssl_certificate_key</code> on <strong id="mcs-server"></strong> that points at the certificate
+      below is switched to the managed one. The edits are staged — review them in Raw Configs, then Apply.
+    </p>
+    <div class="form-group"><label>Replace</label><select id="mcs-from"></select></div>
+    <div class="modal-actions">
+      <button class="btn-secondary" onclick="document.getElementById('mc-switch-modal').classList.remove('open')">Cancel</button>
+      <button class="btn-primary" onclick="mcSwitchSites()">🔀 Stage changes</button>
+    </div>
+  </div>
+</div>
+
 <!-- ─── UPLOAD CERT MODAL ─── -->
 <div class="modal-backdrop" id="upload-cert-modal">
   <div class="modal">
@@ -817,6 +903,11 @@ function initSocket() {
   });
   S.socket.on('agents', debounce(loadAgents, 300));
   S.socket.on('groups', debounce(async () => { await loadGroups(); renderAgentList(); }, 300));
+  S.socket.on('managedcerts', debounce(() => { if (S.currentAgentId) loadCerts(); }, 300));
+  S.socket.on('certlog', ({ id, line }) => {
+    const mc = (S.managed || []).find(c => c.id === id);
+    if (mc) { mc.log = [...(mc.log || []), line].slice(-50); const el = document.getElementById(`mclog-${cssId(id)}`); if (el) { el.textContent = mc.log.join('\n'); el.scrollTop = el.scrollHeight; } }
+  });
   S.socket.on('files', debounce(({ agentId } = {}) => {
     if (agentId === S.currentAgentId) { loadConfigs(); loadCerts(); loadSites(); }
   }, 300));
@@ -1655,9 +1746,12 @@ function pushSite(siteId) {
 async function loadCerts() {
   if (!S.currentAgentId) return;
   const agentId = S.currentAgentId;
-  const certs = await apiFetch(`/api/agents/${agentId}/certs`) || [];
+  const [certs, managed] = await Promise.all([apiFetch(`/api/agents/${agentId}/certs`), apiFetch('/api/managed-certs')]);
   if (agentId !== S.currentAgentId) return;
-  S.certs = certs;
+  S.certs = certs || [];
+  S.managed = managed?.certs || [];
+  S.certCatalog = managed?.catalog || S.certCatalog;
+  renderManagedCerts();
   document.getElementById('stat-certs-count').textContent = S.certs.length;
   renderCerts();
 }
@@ -1692,6 +1786,7 @@ function renderCerts() {
         <div style="margin-top:6px;display:flex;gap:6px;flex-wrap:wrap">
           ${c.pending ? `<span class="badge badge-warn">● Staged — Apply to push</span>` : c.onServer ? `<span class="badge badge-success">On server</span>` : `<span class="badge badge-info" title="The agent did not report this file — outside its allowed_directories, or not readable">Not reported by agent</span>`}
           ${certExpiryBadge(m)}
+          ${c.managed ? `<span class="badge badge-accent" title="Renewed and deployed automatically">🔄 managed: ${esc(c.managed.name)}</span>` : ''}
           ${c.inUse ? '' : `<span class="badge badge-info">Not used by any site</span>`}
         </div>
       </div>
@@ -1701,6 +1796,220 @@ function renderCerts() {
       </div>
     </div>`;
   }).join('');
+}
+
+// ── Managed certificates ─────────────────────────────
+let _mcEditId = null;
+const MC_STATE = {
+  ok: ['badge-success', '✅ Valid'], issuing: ['badge-info', '⏳ Issuing…'], pending: ['badge-info', '⏳ Pending'],
+  warning: ['badge-warn', '⚠ Renewal failed'], error: ['badge-danger', '✕ Failed'],
+};
+const DEPLOY_STATE = { ok: 'badge-success', error: 'badge-danger', offline: 'badge-warn' };
+
+function renderManagedCerts() {
+  const el = document.getElementById('managed-certs');
+  const mine = (S.managed || []).filter(c => c.targets.includes(S.currentAgentId));
+  const others = (S.managed || []).length - mine.length;
+  if (!mine.length) {
+    el.innerHTML = `<div class="card-item" style="justify-content:flex-start;gap:14px">
+      <span style="font-size:1.6rem">🔄</span>
+      <div style="font-size:.85rem;color:var(--text-dim)">No managed certificates for this server${others ? ` (${others} for other servers)` : ''}.
+        <strong>＋ Request Certificate</strong> issues one with Let's Encrypt (or another CA / AWS ACM), deploys it, and renews it automatically.</div>
+    </div>`;
+    return;
+  }
+  const srcLabel = id => (S.certCatalog?.issuers || []).find(i => i.id === id)?.label || id;
+  el.innerHTML = `<div class="section-header"><span class="section-title">Managed certificates</span></div>` + mine.map(c => {
+    const st = c.status || {};
+    const [cls, txt] = MC_STATE[c.busy ? 'issuing' : st.state] || ['badge-info', st.state || '?'];
+    const renewAt = st.notAfter ? new Date(Date.parse(st.notAfter) - c.renewDays * 86400000) : null;
+    const deps = c.targets.map(t => {
+      const a = S.agents.find(x => x.id === t); const d = (st.deployments || {})[t];
+      return `<span class="badge ${DEPLOY_STATE[d?.state] || 'badge-info'}" title="${esc(d?.message || 'not deployed yet')}${d?.at ? ' · ' + esc(formatDate(d.at)) : ''}">${esc(a?.name || t)}: ${esc(d?.state || 'pending')}</span>`;
+    }).join(' ');
+    return `
+    <div class="cert-card">
+      <div class="cert-icon">🔄</div>
+      <div class="cert-info">
+        <div class="cert-label">${esc(c.name)} <span class="badge ${cls}">${txt}</span></div>
+        <div class="cert-paths">
+          source:  ${esc(srcLabel(c.source))}${c.challenge ? ` · DNS: ${esc(c.challenge.provider)}` : ''}<br>
+          domains: ${esc((st.sans && st.sans.length ? st.sans : c.domains || []).join(', ') || '—')}<br>
+          ${st.notBefore ? `issued:  ${esc(formatCertDate(st.notBefore))}<br>` : ''}
+          ${st.notAfter ? `expires: ${certExpiryText(st.notAfter)}<br>` : ''}
+          ${renewAt ? `renews:  ${esc(formatCertDate(renewAt.toISOString()))} (${c.renewDays} days before expiry)<br>` : ''}
+          files:   ${esc(c.certPath)}<br>&nbsp;        ${esc(c.keyPath)}
+          ${st.lastError ? `<br><span style="color:var(--danger)">last error: ${esc(st.lastError)}</span>` : ''}
+        </div>
+        <div style="margin-top:6px;display:flex;gap:6px;flex-wrap:wrap">${deps}</div>
+        <details style="margin-top:8px"><summary style="cursor:pointer;font-size:.78rem;color:var(--text-dim)">Log</summary>
+          <pre class="log-output" id="mclog-${cssId(c.id)}" style="max-height:200px;font-size:.75rem;margin-top:6px">${esc((c.log || []).join('\n') || 'No activity yet')}</pre></details>
+      </div>
+      <div class="cert-actions" style="flex-direction:column;align-items:stretch">
+        <button class="btn-secondary btn-sm" onclick="mcAction('${esc(c.id)}','renew')" ${c.busy ? 'disabled' : ''} title="Request a new certificate now">🔄 Renew now</button>
+        <button class="btn-secondary btn-sm" onclick="mcAction('${esc(c.id)}','deploy')" ${c.busy ? 'disabled' : ''} title="Push to any server that doesn't have the current files">📤 Deploy</button>
+        <button class="btn-purple btn-sm" onclick="openMcSwitch('${esc(c.id)}')" title="Point existing sites on this server at this certificate">🔀 Use for sites…</button>
+        <button class="btn-secondary btn-sm" onclick="openManagedCertModal('${esc(c.id)}')">✏️ Edit</button>
+        <button class="btn-danger btn-sm" onclick="mcDelete('${esc(c.id)}')">🗑</button>
+      </div>
+    </div>`;
+  }).join('');
+}
+
+async function ensureCatalog() {
+  if (!S.certCatalog) { const r = await apiFetch('/api/managed-certs'); S.certCatalog = r?.catalog; S.managed = r?.certs || []; }
+  return S.certCatalog;
+}
+
+async function openManagedCertModal(id = null) {
+  const cat = await ensureCatalog();
+  _mcEditId = id;
+  const c = id ? S.managed.find(x => x.id === id) : null;
+  document.getElementById('mc-title').textContent = c ? `✏️ Edit ${c.name}` : '🔄 Request Certificate';
+  document.getElementById('mc-save').textContent = c ? '💾 Save' : '🔄 Save & Issue';
+  const src = document.getElementById('mc-source');
+  src.innerHTML = cat.issuers.map(i => `<option value="${esc(i.id)}">${esc(i.label)}</option>`).join('');
+  src.value = c?.source || cat.issuers.find(i => i.default)?.id || 'letsencrypt';
+  src.disabled = !!c;
+  document.getElementById('mc-dns').innerHTML = cat.dnsProviders.map(p => `<option value="${esc(p.id)}">${esc(p.label)}</option>`).join('');
+  document.getElementById('mc-dns').value = c?.challenge?.provider || 'cloudflare';
+  document.getElementById('mc-name').value = c?.name || '';
+  document.getElementById('mc-domains').value = (c?.domains || []).join(' ');
+  document.getElementById('mc-email').value = c?.issuer?.email || '';
+  document.getElementById('mc-keytype').value = c?.keyType || 'ecdsa';
+  document.getElementById('mc-directory').value = c?.issuer?.directory || '';
+  document.getElementById('mc-eab-kid').value = c?.issuer?.eabKid || '';
+  document.getElementById('mc-eab-hmac').value = '';
+  document.getElementById('mc-eab-hmac').placeholder = c?.hasSecrets?.eabHmac ? '(unchanged)' : '';
+  document.getElementById('mc-propagation').value = c?.challenge?.propagationSeconds || 30;
+  document.getElementById('mc-arn').value = c?.acm?.arn || '';
+  document.getElementById('mc-aws-key').value = c?.acm?.accessKeyId || '';
+  document.getElementById('mc-aws-secret').value = '';
+  document.getElementById('mc-aws-secret').placeholder = c?.hasSecrets?.aws?.secretAccessKey ? '(unchanged)' : '';
+  document.getElementById('mc-renewdays').value = c?.renewDays || 30;
+  document.getElementById('mc-certpath').value = c?.certPath || '';
+  document.getElementById('mc-keypath').value = c?.keyPath || '';
+  // default targets: this server's group (both halves of an HA pair)
+  const me = currentAgent();
+  const group = (me?.group || '').trim();
+  const targets = c?.targets || S.agents.filter(a => a.id === me?.id || (group && (a.group || '').trim() === group)).map(a => a.id);
+  document.getElementById('mc-targets').innerHTML = S.agents.map(a => `
+    <label style="display:flex;align-items:center;gap:6px;font-size:.85rem;cursor:pointer;white-space:nowrap">
+      <input type="checkbox" style="width:auto;margin:0" value="${esc(a.id)}" ${targets.includes(a.id) ? 'checked' : ''} /> ${esc(a.name)}
+      <span class="text-dim" style="font-size:.75rem">${esc(a.group || '')}</span></label>`).join('');
+  mcSourceChange(false);
+  mcRenderDnsFields();
+  if (!c) mcDefaultPaths();
+  document.getElementById('mc-modal').classList.add('open');
+}
+
+function mcIssuer() { return S.certCatalog.issuers.find(i => i.id === document.getElementById('mc-source').value); }
+
+function mcSourceChange(resetDirectory = true) {
+  const i = mcIssuer();
+  const acme = i.type === 'acme';
+  document.getElementById('mc-acme').style.display = acme ? '' : 'none';
+  document.getElementById('mc-acm').style.display = acme ? 'none' : '';
+  document.getElementById('mc-source-hint').textContent = i.hint || '';
+  document.getElementById('mc-directory-wrap').style.display = acme && i.editableDirectory ? '' : 'none';
+  if (resetDirectory || !document.getElementById('mc-directory').value) document.getElementById('mc-directory').value = i.directory || '';
+  document.getElementById('mc-eab-wrap').style.display = acme && i.eab ? '' : 'none';
+}
+
+function mcRenderDnsFields() {
+  const c = _mcEditId ? S.managed.find(x => x.id === _mcEditId) : null;
+  const p = S.certCatalog.dnsProviders.find(x => x.id === document.getElementById('mc-dns').value);
+  document.getElementById('mc-dns-fields').innerHTML = (p?.hint ? `<div class="form-hint" style="margin-bottom:8px">${esc(p.hint)}</div>` : '') + `<div class="form-row">${(p?.fields || []).map(f => `
+    <div class="form-group"><label>${esc(f.label)}</label>
+      <input type="${f.secret ? 'password' : 'text'}" data-dns="${esc(f.key)}" autocomplete="new-password"
+        placeholder="${c?.hasSecrets?.dns?.[f.key] ? '(unchanged)' : ''}" /></div>`).join('')}</div>`;
+}
+
+function mcSlug(s) { return String(s).toLowerCase().replace(/^\*\./, 'wildcard.').replace(/[^a-z0-9.-]+/g, '-').replace(/^-+|-+$/g, '') || 'cert'; }
+function mcDefaultPaths() {
+  if (_mcEditId) return;
+  const base = `/etc/nginx/ssl/${mcSlug(document.getElementById('mc-name').value || 'cert')}`;
+  document.getElementById('mc-certpath').value = `${base}/fullchain.pem`;
+  document.getElementById('mc-keypath').value = `${base}/privkey.pem`;
+}
+
+async function mcSave() {
+  const i = mcIssuer();
+  const dns = {};
+  document.querySelectorAll('#mc-dns-fields [data-dns]').forEach(el => { if (el.value.trim()) dns[el.dataset.dns] = el.value.trim(); });
+  const body = {
+    name: document.getElementById('mc-name').value.trim(),
+    source: i.id,
+    targets: [...document.querySelectorAll('#mc-targets input:checked')].map(x => x.value),
+    certPath: document.getElementById('mc-certpath').value.trim(),
+    keyPath: document.getElementById('mc-keypath').value.trim(),
+    renewDays: parseInt(document.getElementById('mc-renewdays').value, 10) || 30,
+    keyType: document.getElementById('mc-keytype').value,
+    secrets: {},
+  };
+  if (i.type === 'acme') {
+    body.domains = document.getElementById('mc-domains').value.split(/[\s,]+/).filter(Boolean);
+    body.issuer = {
+      email: document.getElementById('mc-email').value.trim(),
+      directory: document.getElementById('mc-directory').value.trim(),
+      eabKid: document.getElementById('mc-eab-kid').value.trim(),
+    };
+    body.challenge = { provider: document.getElementById('mc-dns').value, propagationSeconds: parseInt(document.getElementById('mc-propagation').value, 10) || 30 };
+    body.secrets.dns = dns;
+    const hmac = document.getElementById('mc-eab-hmac').value.trim();
+    if (hmac) body.secrets.eabHmac = hmac;
+  } else {
+    body.acm = { arn: document.getElementById('mc-arn').value.trim(), accessKeyId: document.getElementById('mc-aws-key').value.trim() };
+    const sk = document.getElementById('mc-aws-secret').value.trim();
+    if (sk) body.secrets.aws = { secretAccessKey: sk };
+  }
+  const res = await apiFetch(_mcEditId ? `/api/managed-certs/${encodeURIComponent(_mcEditId)}` : '/api/managed-certs',
+    { method: _mcEditId ? 'PUT' : 'POST', body });
+  if (!res || res.error) { toast(`❌ ${res?.error || 'Save failed'}`, 'error'); return; }
+  document.getElementById('mc-modal').classList.remove('open');
+  toast(_mcEditId ? 'Saved' : 'Requesting certificate — progress is in the card log', 'success');
+  await loadCerts();
+}
+
+async function mcAction(id, action) {
+  const res = await apiFetch(`/api/managed-certs/${encodeURIComponent(id)}/${action}`, { method: 'POST' });
+  if (res?.ok) toast(action === 'renew' ? 'Renewing — see the card log' : 'Deploying — see the card log', 'info');
+  else toast(`❌ ${res?.error || 'failed'}`, 'error');
+  loadCerts();
+}
+
+async function mcDelete(id) {
+  const c = S.managed.find(x => x.id === id);
+  if (!confirm(`Stop managing "${c?.name}"? It will no longer be renewed. Files already on the servers are left in place.`)) return;
+  await apiFetch(`/api/managed-certs/${encodeURIComponent(id)}`, { method: 'DELETE' });
+  toast('Certificate no longer managed', 'info');
+  loadCerts();
+}
+
+let _mcSwitchId = null;
+function openMcSwitch(id) {
+  _mcSwitchId = id;
+  const c = S.managed.find(x => x.id === id);
+  const a = currentAgent();
+  document.getElementById('mcs-name').textContent = c.name;
+  document.getElementById('mcs-server').textContent = a.name;
+  const candidates = S.certs.filter(x => !x.managed && x.inUse && x.remoteKeyPath);
+  document.getElementById('mcs-from').innerHTML = candidates.length
+    ? candidates.map(x => `<option value="${esc(x.id)}">${esc(x.label)} — ${esc(x.remoteCertPath)} (used by ${x.usedBy.length})</option>`).join('')
+    : '<option value="">No other certificates in use on this server</option>';
+  document.getElementById('mc-switch-modal').classList.add('open');
+}
+
+async function mcSwitchSites() {
+  const from = S.certs.find(x => x.id === document.getElementById('mcs-from').value);
+  if (!from) return;
+  const res = await apiFetch(`/api/managed-certs/${encodeURIComponent(_mcSwitchId)}/switch-sites`, {
+    method: 'POST', body: { agentId: S.currentAgentId, fromCert: from.remoteCertPath, fromKey: from.remoteKeyPath },
+  });
+  if (!res?.ok) { toast(`❌ ${res?.error || 'failed'}`, 'error'); return; }
+  document.getElementById('mc-switch-modal').classList.remove('open');
+  toast(`Staged ${res.directives} change${res.directives === 1 ? '' : 's'} in ${res.files} file${res.files === 1 ? '' : 's'} — review in Raw Configs, then Apply`, 'success');
+  await Promise.all([loadConfigs(), loadAgents(), loadCerts()]);
 }
 
 function openUploadCert() {

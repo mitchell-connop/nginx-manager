@@ -12,6 +12,8 @@ if ! command -v node >/dev/null || [ "$(node -p 'process.versions.node.split("."
   apt-get install -y nodejs
 fi
 apt-get install -y git openssl
+# certbot + DNS plugins for managed certificates (issued here, deployed through the agents)
+apt-get install -y certbot python3-certbot-dns-cloudflare python3-certbot-dns-route53
 
 # Clone app (or update an existing checkout)
 mkdir -p "$APP_DIR"

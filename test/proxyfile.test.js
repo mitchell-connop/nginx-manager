@@ -218,3 +218,14 @@ test('rejects values that could inject config', () => {
 test('read-only sites refuse edits', () => {
   assert.throws(() => pf.editSite(FIXTURE, 'vault.example.com', { proxyReadTimeout: 30 }), /variables/);
 });
+
+test('replaceCertPaths swaps only matching ssl_certificate(_key) values', () => {
+  const { text, count } = pf.replaceCertPaths(FIXTURE, {
+    '/etc/letsencrypt/live/example.com/fullchain.pem': '/etc/nginx/ssl/example.com/fullchain.pem',
+    '/etc/letsencrypt/live/example.com/privkey.pem': '/etc/nginx/ssl/example.com/privkey.pem',
+  });
+  assert.equal(count, 6, 'three sites × cert + key');
+  assert.ok(!text.includes('/etc/letsencrypt/live/example.com/'));
+  assert.deepEqual(changedLines(FIXTURE, text).filter(l => l.startsWith('+')).every(l => /ssl_certificate(_key)? \/etc\/nginx\/ssl\//.test(l)), true);
+  assert.equal(pf.replaceCertPaths(FIXTURE, { '/nope': '/x' }).count, 0);
+});

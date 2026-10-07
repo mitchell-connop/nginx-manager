@@ -46,6 +46,8 @@ const { siteToNginxConf, parseNginxConf } = require('./lib/nginxconf');
 const proxyfile = require('./lib/proxyfile');
 const { unifiedDiff } = require('./lib/linediff');
 const { VipMonitor } = require('./lib/vip');
+const { CertManager } = require('./lib/certmanager');
+const issuers = require('./lib/issuers');
 
 // ---------------------------------------------------------------------------
 // Config
@@ -93,6 +95,7 @@ for (const [name, value] of [['ADMIN_PASSWORD', ADMIN_PASS], ['SESSION_SECRET', 
 
 const tls = ensureTls(path.join(store.DATA_DIR, 'tls'));
 const mp  = new ManagementPlane({ tls, port: GRPC_PORT });
+const certManager = new CertManager({ mp });
 
 // Multer — cert file uploads (PEM/CRT/KEY, max 1 MB each), kept in memory
 const certUpload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 1 * 1024 * 1024 } });
@@ -142,12 +145,12 @@ function fileStatus(st, name) {
   const d = st.draft[name];
   if (!d) return 'live';
   if (d.deleted) return 'deleted';
-  return st.live[name] ? 'modified' : 'added';
+  return store.currentFile(st, name) ? 'modified' : 'added';
 }
 
 function readFileContent(st, name) {
   const d = st.draft[name];
-  const entry = d && !d.deleted ? d : st.live[name];
+  const entry = d && !d.deleted ? d : store.currentFile(st, name);
   if (!entry) return null;
   const buf = store.getBlob(entry.hash);
   return buf ? buf.toString('utf8') : undefined;
@@ -433,16 +436,18 @@ app.post('/api/groups/:name/rename', requireAuth, (req, res) => {
 app.get('/api/agents/:id/files', requireAuth, (req, res) => {
   const agent = requireAgent(req, res); if (!agent) return;
   const st = store.readState(agent.id);
-  const names = new Set([...Object.keys(st.live), ...Object.keys(st.draft)]);
+  const names = new Set([...Object.keys(st.live), ...Object.keys(st.pinned), ...Object.keys(st.draft)]);
   const files = [...names].sort().map(name => {
     const d = st.draft[name];
-    const e = d && !d.deleted ? d : st.live[name];
+    const e = d && !d.deleted ? d : store.currentFile(st, name);
     return {
       name,
       size: e ? e.size : 0,
       modified: e ? e.modifiedTime : null,
       status: fileStatus(st, name),
       isCert: !!(e && e.certificateMeta),
+      isKey: !!(e && e.pin && !st.live[name]) && /key|priv/i.test(name),
+      pinned: !!st.pinned[name] && !st.live[name],
       synced: !!(e && store.hasBlob(e.hash)),
     };
   });
@@ -547,6 +552,11 @@ function deriveCerts(agentId) {
       e.files.add(f.path);
     }
   }
+  for (const m of certManager.list().filter(c => c.targets.includes(agentId))) {
+    const e = entry(m.certPath);
+    e.keyPaths.add(m.keyPath);
+    e.managed = { id: m.id, name: m.name, source: m.source };
+  }
   const uploads = store.readCerts(agentId).filter(c => c.uploaded);
   for (const u of uploads) {
     const e = entry(u.remoteCertPath);
@@ -560,7 +570,8 @@ function deriveCerts(agentId) {
     const dirName = path.basename(path.dirname(e.certPath));
     return {
       id: e.id,
-      label: e.uploadLabel || (meta && meta.subject) || (dirName !== 'ssl' && dirName !== 'certs' ? dirName : path.basename(e.certPath)),
+      label: e.uploadLabel || (e.managed && e.managed.name) || (meta && meta.subject) || (dirName !== 'ssl' && dirName !== 'certs' ? dirName : path.basename(e.certPath)),
+      managed: e.managed || null,
       remoteCertPath: e.certPath,
       remoteKeyPath: keyPath,
       remoteChainPath: e.chainPath || null,
@@ -569,7 +580,7 @@ function deriveCerts(agentId) {
       referencedIn: [...e.files].sort(),
       inUse: e.sites.size > 0,
       uploaded: !!e.uploadLabel,
-      onServer: !!st.live[e.certPath],
+      onServer: !!store.currentFile(st, e.certPath),
       pending: [e.certPath, keyPath, e.chainPath].some(p => p && st.draft[p]),
     };
   }).sort((a, b) => a.label.localeCompare(b.label));
@@ -603,9 +614,10 @@ app.post('/api/agents/:id/certs', requireAuth,
     if (!file('certFile') || !file('keyFile')) return res.status(400).json({ error: 'certificate and key files required' });
     if (req.body.remoteChainPath && !remoteChainPath) return res.status(400).json({ error: 'chain path must be absolute' });
 
-    store.stageFile(agent.id, remoteCertPath, file('certFile').buffer, '0644');
-    store.stageFile(agent.id, remoteKeyPath,  file('keyFile').buffer,  '0600');
-    if (file('chainFile') && remoteChainPath) store.stageFile(agent.id, remoteChainPath, file('chainFile').buffer, '0644');
+    // pinned: the agent never reports keys (or certs nothing references yet) back
+    store.stageFile(agent.id, remoteCertPath, file('certFile').buffer, '0644', { pin: true });
+    store.stageFile(agent.id, remoteKeyPath,  file('keyFile').buffer,  '0600', { pin: true });
+    if (file('chainFile') && remoteChainPath) store.stageFile(agent.id, remoteChainPath, file('chainFile').buffer, '0644', { pin: true });
 
     // Remember uploads so they're listed (and selectable in the Builder) before any
     // config references them.
@@ -634,13 +646,99 @@ app.delete('/api/agents/:id/certs', requireAuth, (req, res) => {
   if (cert.inUse) return res.status(409).json({ error: `In use by ${cert.usedBy.join(', ')} — remove it from those configs first` });
   const st = store.readState(agent.id);
   for (const p of [cert.remoteCertPath, cert.remoteKeyPath, cert.remoteChainPath]) {
-    if (p && st.draft[p] && !st.live[p]) delete st.draft[p];
+    if (p && st.draft[p] && !store.currentFile(st, p)) delete st.draft[p];
   }
   store.writeState(agent.id, st);
   store.writeCerts(agent.id, store.readCerts(agent.id).filter(c => c.remoteCertPath !== certPath));
   io.emit('files', { agentId: agent.id });
   io.emit('agents');
   res.json({ ok: true });
+});
+
+// ---------------------------------------------------------------------------
+// Managed certificates — issued on the manager (certbot / AWS ACM), deployed by agents
+// ---------------------------------------------------------------------------
+function certSecretsFromBody(b) {
+  const s = (b && b.secrets) || {};
+  return {
+    eabHmac: typeof s.eabHmac === 'string' ? s.eabHmac.trim() : undefined,
+    dns: s.dns && typeof s.dns === 'object' ? Object.fromEntries(Object.entries(s.dns).map(([k, v]) => [k, String(v || '').trim()])) : undefined,
+    aws: s.aws && typeof s.aws === 'object' ? { secretAccessKey: String(s.aws.secretAccessKey || '').trim() } : undefined,
+  };
+}
+
+function runInBackground(id, opts) {
+  certManager.process(id, opts).catch(err => certManager.log(id, `❌ ${err.message}`));
+}
+
+app.get('/api/managed-certs', requireAuth, (req, res) => {
+  res.json({ catalog: issuers.catalog(), certs: certManager.list().map(c => certManager.view(c)) });
+});
+
+app.post('/api/managed-certs', requireAuth, (req, res) => {
+  try {
+    const cert = certManager.create(req.body || {}, certSecretsFromBody(req.body));
+    runInBackground(cert.id, {});
+    res.json(certManager.view(certManager.get(cert.id)));
+  } catch (err) { sendError(res, err); }
+});
+
+app.put('/api/managed-certs/:id', requireAuth, (req, res) => {
+  try {
+    const before = certManager.get(req.params.id);
+    const cert = certManager.update(req.params.id, req.body || {}, certSecretsFromBody(req.body));
+    const targetsChanged = JSON.stringify(before.targets) !== JSON.stringify(cert.targets) ||
+      before.certPath !== cert.certPath || before.keyPath !== cert.keyPath;
+    if (cert.status.needsReissue || targetsChanged) runInBackground(cert.id, {});
+    res.json(certManager.view(certManager.get(cert.id)));
+  } catch (err) { sendError(res, err); }
+});
+
+// Stops managing the certificate; files already on servers are left in place.
+app.delete('/api/managed-certs/:id', requireAuth, (req, res) => {
+  if (!certManager.get(req.params.id)) return res.status(404).json({ error: 'not found' });
+  certManager.remove(req.params.id);
+  res.json({ ok: true });
+});
+
+app.post('/api/managed-certs/:id/renew', requireAuth, (req, res) => {
+  if (!certManager.get(req.params.id)) return res.status(404).json({ error: 'not found' });
+  runInBackground(req.params.id, { force: true });
+  res.json({ ok: true });
+});
+
+app.post('/api/managed-certs/:id/deploy', requireAuth, (req, res) => {
+  if (!certManager.get(req.params.id)) return res.status(404).json({ error: 'not found' });
+  runInBackground(req.params.id, {});
+  res.json({ ok: true });
+});
+
+// Point a server's sites at this managed certificate: every ssl_certificate /
+// ssl_certificate_key that currently uses fromCert / fromKey is rewritten. Staged only.
+app.post('/api/managed-certs/:id/switch-sites', requireAuth, (req, res) => {
+  const cert = certManager.get(req.params.id);
+  if (!cert) return res.status(404).json({ error: 'not found' });
+  const agent = store.findAgent(req.body && req.body.agentId);
+  if (!agent || !cert.targets.includes(agent.id)) return res.status(400).json({ error: 'server is not a target of this certificate' });
+  const dep = (cert.status.deployments || {})[agent.id];
+  if (!dep || dep.state !== 'ok') return res.status(409).json({ error: 'Deploy the certificate to this server first — nginx -t would fail without the files' });
+  const fromCert = cleanRemotePath(req.body.fromCert);
+  const fromKey = cleanRemotePath(req.body.fromKey);
+  if (!fromCert || !fromKey) return res.status(400).json({ error: 'fromCert and fromKey (absolute paths) required' });
+
+  const st = store.readState(agent.id);
+  let files = 0, directives = 0;
+  for (const name of Object.keys(store.desiredFiles(st)).filter(n => n.endsWith('.conf'))) {
+    const before = readFileContent(st, name);
+    if (typeof before !== 'string') continue;
+    let out;
+    try { out = proxyfile.replaceCertPaths(before, { [fromCert]: cert.certPath, [fromKey]: cert.keyPath }); }
+    catch { continue; }
+    if (out.count) { store.stageFile(agent.id, name, out.text); files++; directives += out.count; }
+  }
+  io.emit('files', { agentId: agent.id });
+  io.emit('agents');
+  res.json({ ok: true, files, directives });
 });
 
 // ---------------------------------------------------------------------------
@@ -921,6 +1019,8 @@ mp.on('log', (agentId, text) => io.emit('log', { agentId, text }));
 mp.on('agents', () => io.emit('agents'));
 mp.on('files', agentId => io.emit('files', { agentId }));
 vipMonitor.on('change', () => io.emit('groups'));
+certManager.on('change', id => io.emit('managedcerts', { id }));
+certManager.on('log', (id, line) => io.emit('certlog', { id, line }));
 vipMonitor.on('failover', ({ group, from, to, at }) => {
   console.log(`[nginx-manager] VIP failover in ${group}: ${from} -> ${to}`);
   for (const a of store.readAgents().filter(x => (x.group || '').trim() === group)) {
@@ -966,6 +1066,7 @@ app.get('*', (req, res) => {
 });
 
 vipMonitor.start();
+certManager.start();
 
 mp.start().catch(err => {
   console.error('[nginx-manager] Failed to start agent gRPC listener:', err.message);

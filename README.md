@@ -12,6 +12,7 @@ Built for ConnopNetworking homelab infrastructure.
 - 📄 **Config editor** — edit every file nginx references, as reported by the agent
 - 🔀 **Reverse proxies** — add and edit sites from a popup; they live in `conf.d/reverse-proxies.conf` (created if missing), edited in place with a live diff preview
 - 🏗️ **Visual Site Builder** — every server block on the server is listed live; static sites and redirects get their own generated file
+- 🔄 **Managed certificates** — certbot runs on the manager (Let's Encrypt by default; ZeroSSL, Google Trust Services, DigiCert, Sectigo or any ACME CA with EAB; or exportable AWS ACM certificates), deploys to every server in the group through the agents, and renews automatically
 - 🔐 **Certificates** — every cert nginx references, live, with SANs, issuer, expiry and which sites use it; upload new cert/key pairs
 - 📤 **Apply** — staged changes are pushed in one go; the agent writes them, runs `nginx -t`, reloads, and **rolls back automatically** if anything fails
 - 🔄 **Live, no scanning** — the Builder, Certificates and Raw Configs tabs are derived from what the agent reports, so hand edits on the server show up within seconds (agent file watcher)
@@ -95,6 +96,13 @@ Edit `.env` (see `.env.example`):
 - **Reverse proxies are edited in place** — a site is the `# ===` header comment plus its `upstream` (if any), HTTP→HTTPS redirect and HTTPS `server` blocks, grouped by `server_name`. The popup only rewrites the directives its fields own (`server_name`, upstream `server` lines, `proxy_pass`, cert paths, timeouts, body size, HSTS, WebSocket headers); comments and everything else — keepalive, `proxy_next_upstream`, … — stay byte-for-byte. New proxies are appended to `conf.d/reverse-proxies.conf` in the same layout. Sites whose `proxy_pass` uses variables, and non-proxy server blocks, are read-only cards that open the file.
 - **Applying** writes the files, runs `nginx -t` and does a graceful `nginx -s reload` (no dropped connections). The agent then watches the error log for ~10 s before reporting success, and rolls back if anything fails. **Save & Apply** in the popup does both in one click.
 - **Static sites and redirects** made in the builder own their whole generated `.conf` file and are edited in the form.
+- **Managed certificates** are issued once, on the manager — so an HA pair always serves the same certificate — and pushed to each target server as two files (default `/etc/nginx/ssl/<name>/fullchain.pem` + `privkey.pem`; the key is mode 600). A deployment applies only those two files, never unrelated pending edits, and the agent still runs `nginx -t`, reloads and rolls back on failure. Renewal is checked every 10 minutes (default: renew when 30 days are left); servers that were offline get the new certificate when they reconnect.
+  - **Validation is DNS-01** (works for wildcards and for servers not reachable from the internet): Cloudflare (API token with Zone → DNS → Edit), Route 53, or custom hook scripts for any other DNS host.
+  - **Other CAs**: ZeroSSL, Google Trust Services, DigiCert and Sectigo use ACME with External Account Binding — paste the EAB key ID and HMAC from your CA account (DigiCert/Sectigo: also the account's ACME directory URL).
+  - **AWS Certificate Manager**: the certificate must be requested with export enabled (or come from AWS Private CA). AWS renews it; nginx-manager checks the serial every 6 hours and re-exports + redeploys when it changes. IAM: `acm:DescribeCertificate`, `acm:ExportCertificate`.
+  - **Use for sites…** switches every `ssl_certificate`/`ssl_certificate_key` that points at an old certificate to the managed one (staged for review, then Apply).
+  - Secrets (DNS tokens, EAB HMAC, AWS keys) live only in `data/cert-secrets.json` (mode 600) and are never returned by the API. ACME account keys and issued certificates live in `data/certbot/`.
+- **Keys the agent doesn't report** (NGINX Agent never uploads private keys) are remembered by the manager and included in every later apply — otherwise the agent would delete them.
 - **Data** lives in `./data/` (git-ignored, mode 700): server list, synced file contents, uploaded-cert labels, builder site definitions, and the gRPC TLS material. Synced files can include TLS private keys referenced by nginx — protect backups accordingly.
 - `proto/` contains the NGINX Agent `mpi.v1` protobuf definitions (Apache-2.0, from [nginx/agent](https://github.com/nginx/agent)) with `buf.validate` annotations removed.
 
@@ -102,6 +110,11 @@ Edit `.env` (see `.env.example`):
 
 ```bash
 npm install
-npm test        # management-plane protocol test (fake agent)
+npm test        # unit + protocol tests (fake agent)
+
+# managed-certificate pipeline against Let's Encrypt's Pebble test CA:
+#   run pebble + pebble-challtestsrv, then
+NM_TEST_PEBBLE=1 CERTBOT_BIN=$(which certbot) REQUESTS_CA_BUNDLE=pebble.minica.pem NM_TEST_HOOKS=<dir with auth-hook.sh/cleanup-hook.sh> \
+  node --test test/certmanager.test.js
 npm run dev
 ```

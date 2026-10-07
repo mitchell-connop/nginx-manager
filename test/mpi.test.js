@@ -173,10 +173,37 @@ test('agent lifecycle: auth, file sync, config apply, rollback', async (t) => {
   assert.equal(Object.keys(st.draft).length, 2, 'draft kept for fixing');
   assert.ok(st.live['/etc/nginx/conf.d/a.conf'], 'live state unchanged');
 
+  // ── deployment mode: only the given files; result pinned; later applies keep them ──
+  store.stageDelete(agentId, '/etc/nginx/conf.d/a.conf');   // still pending from above
+  const keyPem = Buffer.from('-----BEGIN PRIVATE KEY-----\nfake\n-----END PRIVATE KEY-----\n');
+  const deploying = mp.configApply(agentId, { files: { '/etc/nginx/ssl/k.pem': { content: keyPem, permissions: '0600', pin: true } } });
+  const req3 = await next(m => m.request === 'configApplyRequest');
+  const names3 = req3.configApplyRequest.overview.files.map(f => f.fileMeta.name);
+  assert.ok(names3.includes('/etc/nginx/ssl/k.pem'));
+  assert.ok(names3.includes('/etc/nginx/conf.d/a.conf'), 'pending delete NOT applied by a deployment');
+  const k = await files.call('getFile', { messageMeta: meta(), fileMeta: { name: '/etc/nginx/ssl/k.pem', hash: sha(keyPem) } });
+  assert.equal(Buffer.from(k.contents.contents).toString(), keyPem.toString(), 'in-flight file downloadable');
+  stream.write({ messageMeta: meta(req3.messageMeta.correlationId), commandResponse: { status: 'COMMAND_STATUS_OK', message: 'ok' } });
+  assert.equal((await deploying).success, true);
+  st = store.readState(agentId);
+  assert.ok(st.pinned['/etc/nginx/ssl/k.pem'], 'deployed key pinned');
+  assert.ok(st.draft['/etc/nginx/conf.d/a.conf'], 'unrelated draft still pending');
+  assert.equal((await mp.configApply(agentId, { files: { '/etc/nginx/ssl/k.pem': { content: keyPem, pin: true } } })).unchanged, true,
+    'redeploying identical content is a no-op');
+
   // ── a new full overview (e.g. agent restart) replaces the live set ────────
   await files.call('updateOverview', {
     messageMeta: meta(),
     overview: { files: [overview[0]], configVersion: { instanceId: INSTANCE, version: 'y' } },
   });
   assert.deepEqual(Object.keys(store.readState(agentId).live), ['/etc/nginx/nginx.conf']);
+  assert.ok(store.readState(agentId).pinned['/etc/nginx/ssl/k.pem'], 'pinned key survives an overview that omits it');
+
+  // ── …and the next normal apply still includes the pinned key ─────────────
+  store.stageFile(agentId, '/etc/nginx/conf.d/z.conf', 'server { listen 81; }\n');
+  const applying4 = mp.configApply(agentId);
+  const req4 = await next(m => m.request === 'configApplyRequest');
+  assert.ok(req4.configApplyRequest.overview.files.some(f => f.fileMeta.name === '/etc/nginx/ssl/k.pem'), 'pinned key in later applies');
+  stream.write({ messageMeta: meta(req4.messageMeta.correlationId), commandResponse: { status: 'COMMAND_STATUS_OK', message: 'ok' } });
+  assert.equal((await applying4).success, true);
 });
