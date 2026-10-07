@@ -4,6 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Nginx Manager</title>
+  <link rel="icon" id="favicon" href="data:," />
   <script src="/socket.io/socket.io.js"></script>
   <style>
     :root {
@@ -32,7 +33,11 @@
     /* ── LOGIN ── */
     #login-screen { display: flex; align-items: center; justify-content: center; min-height: 100vh; background: radial-gradient(ellipse at 60% 30%, #1a2a4a 0%, var(--bg) 70%); }
     .login-card { background: var(--surface); border: 1px solid var(--border); border-radius: 16px; padding: 48px; width: 380px; text-align: center; }
-    .login-card .logo { font-size: 48px; margin-bottom: 16px; }
+    .login-card .logo { font-size: 48px; margin-bottom: 16px; display: flex; justify-content: center; }
+    .login-card .logo img { width: 84px; height: 84px; object-fit: contain; border-radius: 14px; }
+    .header-brand img { width: 30px; height: 30px; object-fit: contain; border-radius: 6px; display: block; }
+    .brand-preview { width: 84px; height: 84px; border: 1px dashed var(--border); border-radius: 14px; display: flex; align-items: center; justify-content: center; font-size: 40px; overflow: hidden; flex-shrink: 0; }
+    .brand-preview img { width: 100%; height: 100%; object-fit: contain; }
     .login-card h1 { font-size: 1.5rem; color: var(--accent); margin-bottom: 8px; }
     .login-card p { color: var(--text-dim); margin-bottom: 32px; font-size: 0.9rem; }
     .login-card input { width: 100%; padding: 12px 16px; background: var(--surface2); border: 1px solid var(--border); border-radius: 8px; color: var(--text); font-size: 1rem; margin-bottom: 16px; outline: none; transition: border-color .2s; }
@@ -298,9 +303,9 @@
 <!-- ══════════════════════ LOGIN ══════════════════════ -->
 <div id="login-screen">
   <div class="login-card">
-    <div class="logo">⚙️</div>
-    <h1>Nginx Manager</h1>
-    <p>ConnopNetworking — Nginx Config Control</p>
+    <div class="logo" id="brand-login-logo">⚙️</div>
+    <h1 id="brand-login-title">Nginx Manager</h1>
+    <p id="brand-login-text">Nginx config control</p>
     <input type="password" id="login-pass" placeholder="Admin password"
       onkeydown="if(event.key==='Enter')doLogin()" />
     <div class="login-error" id="login-error"></div>
@@ -313,10 +318,11 @@
 <!-- ══════════════════════ APP ══════════════════════ -->
 <div id="app">
   <header>
-    <div class="header-brand"><span>⚙️</span>Nginx Manager</div>
+    <div class="header-brand"><span id="brand-header-logo">⚙️</span><span id="brand-header-title">Nginx Manager</span></div>
     <div class="header-actions">
       <span style="font-size:.8rem;color:var(--text-dim)" id="agent-count-label"></span>
       <button class="btn-secondary btn-sm" onclick="openAddAgent()">＋ Add Server</button>
+      <button class="btn-secondary btn-sm" onclick="openBranding()" title="Logo, app name and login text">🎨 Branding</button>
       <button class="btn-secondary btn-sm" onclick="doLogout()">🚪 Logout</button>
     </div>
   </header>
@@ -510,6 +516,31 @@
       <button class="btn-warn" onclick="regenerateToken()">♻ New Token</button>
       <button class="btn-secondary" onclick="copyText('setup-script')">📋 Copy Script</button>
       <button class="btn-primary" onclick="document.getElementById('setup-modal').classList.remove('open')">Done</button>
+    </div>
+  </div>
+</div>
+
+<!-- ─── BRANDING MODAL ─── -->
+<div class="modal-backdrop" id="brand-modal">
+  <div class="modal">
+    <h3>🎨 Branding</h3>
+    <p style="font-size:.85rem;color:var(--text-dim);margin:-6px 0 16px">Shown on the login screen, in the header and as the browser tab icon. Stored on this manager only.</p>
+    <div class="form-group"><label>Logo</label>
+      <div style="display:flex;gap:16px;align-items:center">
+        <div class="brand-preview" id="brand-preview">⚙️</div>
+        <div style="display:flex;flex-direction:column;gap:8px">
+          <input type="file" id="brand-file" accept="image/png,image/jpeg,image/webp,image/gif" onchange="brandPick()" style="font-size:.8rem" />
+          <button class="btn-secondary btn-sm" onclick="brandRemoveLogo()">Remove logo</button>
+          <div class="form-hint">PNG, JPEG, WebP or GIF, up to 512 KB. A square image looks best.</div>
+        </div>
+      </div>
+    </div>
+    <div class="form-group"><label>App name</label><input type="text" id="brand-title" maxlength="40" /></div>
+    <div class="form-group"><label>Login text</label><input type="text" id="brand-subtitle" maxlength="120" /></div>
+    <div class="modal-actions">
+      <button class="btn-warn" onclick="brandReset()">Reset to defaults</button>
+      <button class="btn-secondary" onclick="document.getElementById('brand-modal').classList.remove('open')">Cancel</button>
+      <button class="btn-primary" onclick="brandSave()">💾 Save</button>
     </div>
   </div>
 </div>
@@ -945,6 +976,7 @@ const SITE_ICONS = { proxy: '🔀', static: '📁', redirect: '↩' };
 
 // ─── INIT ─────────────────────────────────────────────
 window.addEventListener('DOMContentLoaded', async () => {
+  loadBranding();
   const me = await apiFetch('/api/me');
   if (me && me.authenticated) showApp();
   // Tab click delegation
@@ -968,6 +1000,7 @@ function initSocket() {
     enableButtons();
   });
   S.socket.on('agents', debounce(loadAgents, 300));
+  S.socket.on('branding', loadBranding);
   S.socket.on('groups', debounce(async () => { await loadGroups(); renderAgentList(); }, 300));
   S.socket.on('managedcerts', debounce(() => { if (S.currentAgentId) loadCerts(); }, 300));
   S.socket.on('certlog', ({ id, line }) => {
@@ -977,6 +1010,79 @@ function initSocket() {
   S.socket.on('files', debounce(({ agentId } = {}) => {
     if (agentId === S.currentAgentId) { loadConfigs(); loadCerts(); loadSites(); loadForwardProxies(); }
   }, 300));
+}
+
+// ─── BRANDING ─────────────────────────────────────────
+let _brand = null;
+let _brandFile = null;
+
+function logoHtml(url, fallback = '⚙️') {
+  return url ? `<img src="${esc(url)}" alt="" />` : fallback;
+}
+
+async function loadBranding() {
+  try {
+    const r = await fetch('/api/branding');
+    if (!r.ok) return;
+    _brand = await r.json();
+  } catch { return; }
+  document.title = _brand.title;
+  document.getElementById('brand-login-logo').innerHTML = logoHtml(_brand.logoUrl);
+  document.getElementById('brand-login-title').textContent = _brand.title;
+  document.getElementById('brand-login-text').textContent = _brand.subtitle;
+  document.getElementById('brand-header-logo').innerHTML = logoHtml(_brand.logoUrl);
+  document.getElementById('brand-header-title').textContent = _brand.title;
+  document.getElementById('favicon').href = _brand.logoUrl || 'data:,';
+}
+
+function openBranding() {
+  _brandFile = null;
+  document.getElementById('brand-file').value = '';
+  document.getElementById('brand-title').value = _brand?.title || '';
+  document.getElementById('brand-subtitle').value = _brand?.subtitle || '';
+  document.getElementById('brand-preview').innerHTML = logoHtml(_brand?.logoUrl);
+  document.getElementById('brand-modal').classList.add('open');
+}
+
+function brandPick() {
+  const f = document.getElementById('brand-file').files[0];
+  if (!f) return;
+  if (f.size > 512 * 1024) { toast('Logo must be 512 KB or smaller', 'error'); document.getElementById('brand-file').value = ''; return; }
+  _brandFile = f;
+  document.getElementById('brand-preview').innerHTML = `<img src="${URL.createObjectURL(f)}" alt="" />`;
+}
+
+async function brandSave() {
+  if (_brandFile) {
+    const fd = new FormData();
+    fd.append('logo', _brandFile);
+    const up = await apiUpload('/api/branding/logo', fd);
+    if (!up || up.error) { toast(`❌ ${up?.error || 'Logo upload failed'}`, 'error'); return; }
+  }
+  const res = await apiFetch('/api/branding', { method: 'PUT', body: {
+    title: document.getElementById('brand-title').value, subtitle: document.getElementById('brand-subtitle').value,
+  } });
+  if (!res || res.error) { toast(`❌ ${res?.error || 'Save failed'}`, 'error'); return; }
+  document.getElementById('brand-modal').classList.remove('open');
+  await loadBranding();
+  toast('Branding saved', 'success');
+}
+
+async function brandRemoveLogo() {
+  if (!confirm('Remove the logo and go back to the default icon?')) return;
+  await apiFetch('/api/branding/logo', { method: 'DELETE' });
+  _brandFile = null;
+  await loadBranding();
+  document.getElementById('brand-preview').innerHTML = logoHtml(null);
+  toast('Logo removed', 'info');
+}
+
+async function brandReset() {
+  if (!confirm('Reset logo, app name and login text to the defaults?')) return;
+  await apiFetch('/api/branding/reset', { method: 'POST' });
+  document.getElementById('brand-modal').classList.remove('open');
+  await loadBranding();
+  toast('Branding reset', 'info');
 }
 
 // ─── AUTH ─────────────────────────────────────────────

@@ -49,6 +49,7 @@ const { VipMonitor } = require('./lib/vip');
 const { CertManager } = require('./lib/certmanager');
 const issuers = require('./lib/issuers');
 const fwdproxy = require('./lib/fwdproxy');
+const branding = require('./lib/branding');
 
 // ---------------------------------------------------------------------------
 // Config
@@ -285,6 +286,56 @@ app.post('/api/login', async (req, res) => {
   });
 });
 app.post('/api/logout', (req, res) => { req.session.destroy(() => res.json({ ok: true })); });
+// ---------------------------------------------------------------------------
+// Branding — app name, login text, logo (public read: the login screen needs it)
+// ---------------------------------------------------------------------------
+const logoUpload = multer({ storage: multer.memoryStorage(), limits: { fileSize: branding.MAX_LOGO_BYTES + 1 } });
+
+app.get('/api/branding', (req, res) => res.json(branding.publicView()));
+
+app.get('/branding/logo', (req, res) => {
+  const f = branding.logoFile();
+  if (!f) return res.status(404).end();
+  res.set({
+    'Content-Type': f.mime,
+    'Cache-Control': 'public, max-age=86400',
+    'X-Content-Type-Options': 'nosniff',
+    'Content-Security-Policy': "default-src 'none'",
+  });
+  res.sendFile(f.path);
+});
+
+app.put('/api/branding', requireAuth, (req, res) => {
+  try {
+    const out = branding.updateText(req.body || {});
+    io.emit('branding');
+    res.json(out);
+  } catch (err) { res.status(err.status || 400).json({ error: err.message }); }
+});
+
+app.post('/api/branding/logo', requireAuth, (req, res) => {
+  logoUpload.single('logo')(req, res, err => {
+    if (err) return res.status(400).json({ error: err.code === 'LIMIT_FILE_SIZE' ? 'Logo must be 512 KB or smaller' : err.message });
+    try {
+      const out = branding.setLogo(req.file && req.file.buffer);
+      io.emit('branding');
+      res.json(out);
+    } catch (e) { res.status(e.status || 400).json({ error: e.message }); }
+  });
+});
+
+app.delete('/api/branding/logo', requireAuth, (req, res) => {
+  const out = branding.clearLogo();
+  io.emit('branding');
+  res.json(out);
+});
+
+app.post('/api/branding/reset', requireAuth, (req, res) => {
+  const out = branding.reset();
+  io.emit('branding');
+  res.json(out);
+});
+
 app.get('/api/me', (req, res) => {
   res.json({ authenticated: !!(req.session && req.session.authenticated) });
 });

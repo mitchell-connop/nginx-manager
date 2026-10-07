@@ -18,6 +18,7 @@ Built for ConnopNetworking homelab infrastructure.
 - 📤 **Apply** — staged changes are pushed in one go; the agent writes them, runs `nginx -t`, reloads, and **rolls back automatically** if anything fails
 - 🔄 **Live, no scanning** — the Builder, Certificates and Raw Configs tabs are derived from what the agent reports, so hand edits on the server show up within seconds (agent file watcher)
 - 📊 **Status** — agent connection, nginx version and instance health
+- 🎨 **Branding** — your own logo (also the browser tab icon), app name and login text; stored in `data/` so updates keep it
 - 🖥️ **Live log** — Socket.IO real-time operation output (session-authenticated)
 
 ## Architecture
