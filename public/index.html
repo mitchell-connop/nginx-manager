@@ -372,7 +372,8 @@
           <div class="section-header">
             <span class="section-title">Sites</span>
             <div style="display:flex;gap:8px">
-              <button class="btn-primary btn-sm"   onclick="openSiteModal()">＋ Add Site</button>
+              <button class="btn-secondary btn-sm" onclick="openSiteModal()" title="Static site or redirect (own generated file)">＋ Static / Redirect</button>
+              <button class="btn-primary btn-sm"   onclick="openProxyModal()">＋ Add Reverse Proxy</button>
             </div>
           </div>
           <div class="sites-grid" id="sites-grid"></div>
@@ -504,6 +505,78 @@
   </div>
 </div>
 
+<!-- ─── REVERSE PROXY MODAL (add + edit, in reverse-proxies.conf) ─── -->
+<div class="modal-backdrop" id="proxy-modal">
+  <div class="modal modal-wide">
+    <h3 id="px-title">🔀 Add Reverse Proxy</h3>
+    <p style="font-size:.82rem;color:var(--text-dim);margin:-6px 0 16px" id="px-subtitle"></p>
+
+    <div class="form-row">
+      <div class="form-group"><label>Name <span class="req">*</span></label><input type="text" id="px-name" placeholder="JELLYFIN" oninput="pxPreview()" />
+        <div class="form-hint">The <code># ===</code> header comment above the site.</div></div>
+      <div class="form-group"><label>Domain(s) <span class="req">*</span></label><input type="text" id="px-servername" placeholder="app.example.com" oninput="pxPreview()" /></div>
+    </div>
+
+    <div class="form-group">
+      <label>Backend(s) <span class="req">*</span></label>
+      <div class="upstream-list" id="px-backends"></div>
+      <button class="btn-secondary btn-sm" style="margin-top:6px" onclick="pxAddBackend()">＋ Add Backend</button>
+      <div class="form-hint" id="px-backend-hint">host:port. Two or more backends become an <code>upstream</code> pool.</div>
+    </div>
+    <div class="form-row">
+      <div class="form-group"><label>Backend scheme</label>
+        <select id="px-scheme" onchange="pxPreview()"><option value="http">http://</option><option value="https">https://</option></select></div>
+      <div class="form-group"><label>Backend path</label><input type="text" id="px-path" placeholder="(none) e.g. /guacamole/" oninput="pxPreview()" /></div>
+      <div class="form-group" id="px-lb-wrap"><label>Load balancing</label>
+        <select id="px-lb" onchange="pxPreview()">
+          <option value="round_robin">Round robin</option><option value="least_conn">Least connections</option><option value="ip_hash">IP hash</option>
+        </select></div>
+    </div>
+
+    <div style="border-top:1px solid var(--border);padding-top:14px;margin-top:4px">
+      <div class="toggle-group" id="px-ssl-row">
+        <label for="px-ssl">🔒 HTTPS (listen 443 ssl)</label>
+        <label class="toggle"><input type="checkbox" id="px-ssl" onchange="pxSslChange(); pxPreview()" /><span class="toggle-slider"></span></label>
+      </div>
+      <div class="form-hint" id="px-ssl-note" style="display:none;margin-bottom:8px"></div>
+      <div id="px-ssl-opts">
+        <div class="form-group"><label>Certificate</label>
+          <select id="px-certid" onchange="pxCertPick(); pxPreview()"></select></div>
+        <div class="form-row">
+          <div class="form-group"><label>Certificate file</label><input type="text" id="px-certfile" oninput="pxPreview()" /></div>
+          <div class="form-group"><label>Key file</label><input type="text" id="px-keyfile" oninput="pxPreview()" /></div>
+        </div>
+        <div class="toggle-group" id="px-redirect-row"><label for="px-redirect">Redirect HTTP → HTTPS</label>
+          <label class="toggle"><input type="checkbox" id="px-redirect" checked onchange="pxPreview()" /><span class="toggle-slider"></span></label></div>
+        <div class="toggle-group"><label for="px-hsts">HSTS header</label>
+          <label class="toggle"><input type="checkbox" id="px-hsts" onchange="pxPreview()" /><span class="toggle-slider"></span></label></div>
+      </div>
+      <div class="form-group" id="px-port-wrap" style="display:none"><label>Listen port</label><input type="number" id="px-port" value="80" oninput="pxPreview()" /></div>
+    </div>
+
+    <div style="border-top:1px solid var(--border);padding-top:14px;margin-top:4px">
+      <div class="toggle-group"><label for="px-ws">WebSockets</label>
+        <label class="toggle"><input type="checkbox" id="px-ws" checked onchange="pxPreview()" /><span class="toggle-slider"></span></label></div>
+      <div class="form-row">
+        <div class="form-group"><label>Max upload size</label><input type="text" id="px-body" placeholder="nginx default (1M)" oninput="pxPreview()" /></div>
+        <div class="form-group"><label>Read timeout (s)</label><input type="number" id="px-timeout" placeholder="nginx default (60)" min="1" oninput="pxPreview()" /></div>
+      </div>
+    </div>
+
+    <div style="margin-top:8px">
+      <div style="font-size:.78rem;color:var(--text-dim);text-transform:uppercase;letter-spacing:.8px;margin-bottom:6px">Change to <span class="mono" id="px-target" style="text-transform:none;letter-spacing:0"></span></div>
+      <pre class="preview-pane" id="px-preview" style="white-space:pre;overflow:auto;max-height:280px"></pre>
+    </div>
+
+    <div class="modal-actions">
+      <button class="btn-secondary" onclick="closeProxyModal()">Cancel</button>
+      <button class="btn-secondary" id="px-openfile" onclick="pxOpenFile()">📄 Open file</button>
+      <button class="btn-primary" onclick="pxSave(false)">💾 Save</button>
+      <button class="btn-success" onclick="pxSave(true)" title="Save, then push: the agent runs nginx -t and reloads, rolling back on failure">📤 Save &amp; Apply</button>
+    </div>
+  </div>
+</div>
+
 <!-- ─── SITE BUILDER MODAL ─── -->
 <div class="modal-backdrop" id="site-modal">
   <div class="modal modal-wide">
@@ -514,7 +587,6 @@
       <div class="form-group">
         <label>Type</label>
         <select id="s-type" onchange="onTypeChange(); previewConf()">
-          <option value="proxy">🔀 Reverse Proxy</option>
           <option value="static">📁 Static Site</option>
           <option value="redirect">↩ Redirect</option>
         </select>
@@ -736,6 +808,7 @@ function initSocket() {
   S.socket.on('connect_error', () => {});
   S.socket.on('log', ({ agentId, text }) => { if (agentId === S.currentAgentId) appendLog(text); });
   S.socket.on('done', data => {
+    if (data.op === 'apply' || data.op === 'sync') loadAgents();
     if (data.agentId !== S.currentAgentId) return;
     if (data.op === 'status') return;
     if (data.success) toast(`✅ ${data.op === 'apply' ? 'Applied' : 'Done'}${data.output ? ' — ' + data.output : ''}`, 'success');
@@ -1157,12 +1230,12 @@ function renderSites() {
       <div class="site-card-header">
         <span class="site-card-icon">${SITE_ICONS[s.type] || '🌐'}</span>
         <div style="flex:1;min-width:0">
-          <div class="site-card-title">${esc(s.discovered ? (s.serverName || s.name) : s.name)}</div>
-          <div class="site-card-host">${esc(s.discovered ? s.confPath.split('/').pop() : (s.serverName || '(any)'))}</div>
+          <div class="site-card-title">${esc(s.name || s.serverName)}</div>
+          <div class="site-card-host">${esc(s.serverName || '(any)')}</div>
         </div>
       </div>
       <div class="site-card-badges">
-        ${s.discovered ? `<span class="badge badge-info" title="Hand-written config — edit the file">📄 from file</span>` : `<span class="badge badge-accent" title="Generated by the Visual Builder">🏗️ builder</span>`}
+        ${s.discovered ? `<span class="badge badge-info" title="${esc(s.confPath)}">📄 ${esc(s.confPath.split('/').pop())}</span>` : `<span class="badge badge-accent" title="Generated by the Visual Builder">🏗️ builder</span>`}
         <span class="badge badge-info">${s.type}${s.listenPort ? ' :' + s.listenPort : ''}</span>
         ${s.fileStatus && s.fileStatus !== 'live' ? `<span class="badge ${FILE_BADGE[s.fileStatus] || 'badge-warn'}">● ${s.fileStatus === 'added' ? 'new' : s.fileStatus}, unapplied</span>` : ''}
         ${s.ssl ? `<span class="badge badge-success">🔒 SSL</span>` : `<span class="badge badge-warn">⚠ HTTP</span>`}
@@ -1173,12 +1246,173 @@ function renderSites() {
       ${s.type === 'redirect' && s.redirectTo ? `<div style="font-size:.75rem;color:var(--text-dim);font-family:var(--mono)">→ ${esc(s.redirectTo)}</div>` : ''}
       <div class="site-card-actions">
         ${s.discovered
-          ? `<button class="btn-secondary btn-sm" onclick="openSiteFile('${esc(s.confPath)}')">📄 Edit file</button>`
+          ? (s.editable
+              ? `<button class="btn-secondary btn-sm" onclick="openProxyModal('${esc(s.id)}')">✏️ Edit</button>
+                 <button class="btn-secondary btn-sm" onclick="openSiteFile('${esc(s.confPath)}')" title="Open ${esc(s.confPath)}">📄</button>`
+              : `<button class="btn-secondary btn-sm" onclick="openSiteFile('${esc(s.confPath)}')" title="${esc(s.readOnlyReason || '')}">📄 Edit file</button>`)
           : `<button class="btn-secondary btn-sm" onclick="editSite('${s.id}')">✏️ Edit</button>`}
         ${s.fileStatus && s.fileStatus !== 'live' ? `<button class="btn-primary btn-sm" onclick="pushSite('${s.id}')" title="Apply all pending changes">📤 Apply</button>` : ''}
         ${s.fileStatus !== 'deleted' ? `<button class="btn-danger btn-sm" onclick="deleteSite('${esc(s.id)}')">🗑</button>` : ''}
       </div>
     </div>`).join('');
+}
+
+// ── Reverse proxy popup ───────────────────────────────
+let _pxSiteId = null;
+let _pxTimer = null;
+
+function pxRenderBackends(list) {
+  const ul = document.getElementById('px-backends');
+  ul.innerHTML = '';
+  (list.length ? list : ['']).forEach(v => {
+    const row = document.createElement('div');
+    row.className = 'upstream-item';
+    row.innerHTML = `<input type="text" placeholder="192.168.1.10:8080" oninput="pxPreview()" />` +
+      `<button class="btn-danger btn-xs" onclick="this.closest('.upstream-item').remove(); pxBackendsChanged()">✕</button>`;
+    row.querySelector('input').value = v;
+    ul.appendChild(row);
+  });
+  pxBackendsChanged(false);
+}
+function pxBackends() { return [...document.querySelectorAll('#px-backends input')].map(i => i.value.trim()).filter(Boolean); }
+function pxAddBackend() {
+  pxRenderBackends([...pxBackends(), '']);
+  const inputs = document.querySelectorAll('#px-backends input');
+  inputs[inputs.length - 1].focus();
+}
+function pxBackendsChanged(preview = true) {
+  const site = _pxSiteId && S.sites.find(s => s.id === _pxSiteId);
+  const pooled = document.querySelectorAll('#px-backends .upstream-item').length > 1 || !!site?.upstreamName;
+  document.getElementById('px-lb-wrap').style.visibility = pooled ? '' : 'hidden';
+  if (preview) pxPreview();
+}
+
+function pxCertOptions(selectedPath) {
+  const sel = document.getElementById('px-certid');
+  sel.innerHTML = '<option value="">— Manual paths —</option>' + S.certs.map(c =>
+    `<option value="${esc(c.id)}" ${c.id === selectedPath ? 'selected' : ''}>🔐 ${esc(c.label)}${c.certificateMeta?.notAfter ? ` (expires ${esc(formatCertDate(c.certificateMeta.notAfter))})` : ''}</option>`).join('');
+}
+function pxCertPick() {
+  const c = S.certs.find(c => c.id === document.getElementById('px-certid').value);
+  if (c) {
+    document.getElementById('px-certfile').value = c.remoteCertPath || '';
+    document.getElementById('px-keyfile').value = c.remoteKeyPath || '';
+  }
+}
+function pxSslChange() {
+  const on = document.getElementById('px-ssl').checked;
+  document.getElementById('px-ssl-opts').style.display = on ? '' : 'none';
+  document.getElementById('px-port-wrap').style.display = on || _pxSiteId ? 'none' : '';
+}
+
+function openProxyModal(siteId = null) {
+  _pxSiteId = siteId;
+  const s = siteId ? S.sites.find(x => x.id === siteId) : null;
+  const editing = !!s;
+  document.getElementById('px-title').textContent = editing ? `✏️ Edit ${s.name}` : '🔀 Add Reverse Proxy';
+  document.getElementById('px-subtitle').innerHTML = editing
+    ? `Edits are made in place in <span class="mono">${esc(s.confPath)}</span> — only the lines for these fields change; comments and other directives are kept.`
+    : `Appended to <span class="mono">${esc(S.confDir)}/reverse-proxies.conf</span> (created if it doesn't exist).`;
+  document.getElementById('px-name').value = s?.name || '';
+  document.getElementById('px-servername').value = s?.serverName || '';
+  document.getElementById('px-scheme').value = s?.backendScheme || 'http';
+  document.getElementById('px-path').value = s?.backendPath || '';
+  document.getElementById('px-lb').value = s?.lbMethod || 'round_robin';
+  document.getElementById('px-ssl').checked = editing ? !!s.ssl : true;
+  document.getElementById('px-ssl').disabled = editing;
+  document.getElementById('px-ssl-row').style.opacity = editing ? '.6' : '1';
+  const note = document.getElementById('px-ssl-note');
+  note.style.display = editing ? '' : 'none';
+  note.textContent = editing ? 'HTTPS on/off can only be chosen when creating a site — change it in the file.' : '';
+  document.getElementById('px-redirect-row').style.display = editing ? 'none' : '';
+  document.getElementById('px-redirect').checked = true;
+  document.getElementById('px-hsts').checked = !!s?.hsts;
+  document.getElementById('px-ws').checked = editing ? !!s.websockets : true;
+  document.getElementById('px-body').value = s?.clientMaxBodySize || '';
+  document.getElementById('px-timeout').value = s?.proxyReadTimeout ?? '';
+  document.getElementById('px-port').value = s?.listenPort || 80;
+
+  // default to the cert most sites already use when creating
+  const defaultCert = editing ? s.certFile : (S.certs.filter(c => c.inUse).sort((a, b) => b.usedBy.length - a.usedBy.length)[0]?.id || '');
+  pxCertOptions(S.certs.some(c => c.id === defaultCert) ? defaultCert : '');
+  document.getElementById('px-certfile').value = editing ? s.certFile : '';
+  document.getElementById('px-keyfile').value = editing ? s.keyFile : '';
+  if (!editing) pxCertPick();
+
+  pxRenderBackends(s?.backends || ['']);
+  document.getElementById('px-backend-hint').innerHTML = s?.upstreamName
+    ? `Servers in <code>upstream ${esc(s.upstreamName)}</code>${s.upstreamShared ? ' — <strong>shared with other sites</strong>, changes affect them too' : ''}. Other settings in the pool (keepalive etc.) are kept.`
+    : 'host:port. Two or more backends become an <code>upstream</code> pool.';
+  document.getElementById('px-openfile').style.display = editing ? '' : 'none';
+  pxSslChange();
+  document.getElementById('proxy-modal').classList.add('open');
+  pxPreview(0);
+}
+function closeProxyModal() { document.getElementById('proxy-modal').classList.remove('open'); }
+function pxOpenFile() {
+  const s = S.sites.find(x => x.id === _pxSiteId);
+  closeProxyModal();
+  if (s) openSiteFile(s.confPath);
+}
+
+function pxBody() {
+  const site = _pxSiteId && S.sites.find(s => s.id === _pxSiteId);
+  const ssl = document.getElementById('px-ssl').checked;
+  const timeout = document.getElementById('px-timeout').value.trim();
+  const body = {
+    siteId: _pxSiteId || undefined,
+    name: document.getElementById('px-name').value.trim(),
+    serverName: document.getElementById('px-servername').value.trim().replace(/\s+/g, ' '),
+    backends: pxBackends(),
+    backendScheme: document.getElementById('px-scheme').value,
+    backendPath: document.getElementById('px-path').value.trim(),
+    lbMethod: document.getElementById('px-lb').value,
+    websockets: document.getElementById('px-ws').checked,
+    clientMaxBodySize: document.getElementById('px-body').value.trim(),
+    proxyReadTimeout: timeout === '' ? '' : parseInt(timeout, 10),
+  };
+  if (ssl) {
+    body.certFile = document.getElementById('px-certfile').value.trim();
+    body.keyFile = document.getElementById('px-keyfile').value.trim();
+    body.hsts = document.getElementById('px-hsts').checked;
+  }
+  if (!site) {
+    body.ssl = ssl;
+    body.httpRedirect = document.getElementById('px-redirect').checked;
+    if (!ssl) body.listenPort = parseInt(document.getElementById('px-port').value, 10) || 80;
+  }
+  return body;
+}
+
+function pxPreview(delay = 250) {
+  clearTimeout(_pxTimer);
+  _pxTimer = setTimeout(async () => {
+    const pre = document.getElementById('px-preview');
+    const res = await apiFetch(`/api/agents/${S.currentAgentId}/proxies/preview`, { method: 'POST', body: pxBody() });
+    if (!res) { pre.textContent = '# preview unavailable'; return; }
+    document.getElementById('px-target').textContent = res.path || '';
+    if (res.error) { pre.innerHTML = `<span style="color:var(--warn)">⚠ ${esc(res.error)}</span>`; return; }
+    if (!res.diff) { pre.innerHTML = '<span style="color:var(--text-dim)"># no changes</span>'; return; }
+    pre.innerHTML = (res.created ? '<span style="color:var(--text-dim)"># new file</span>\n' : '') + res.diff.split('\n').map(l => {
+      const c = l.startsWith('@@') ? 'var(--accent2)' : l.startsWith('+') ? 'var(--success)' : l.startsWith('-') ? 'var(--danger)' : 'var(--text-dim)';
+      return `<span style="color:${c}">${esc(l)}</span>`;
+    }).join('\n');
+  }, delay);
+}
+
+async function pxSave(apply) {
+  const body = pxBody();
+  const res = await apiFetch(`/api/agents/${S.currentAgentId}/proxies`, { method: _pxSiteId ? 'PUT' : 'POST', body });
+  if (!res?.ok) { toast(`❌ ${res?.error || 'Save failed'}`, 'error'); return; }
+  closeProxyModal();
+  await Promise.all([loadSites(), loadConfigs(), loadAgents(), loadCerts()]);
+  if (_pxSiteId && res.changed === false) { toast('No changes', 'info'); return; }
+  if (apply) {
+    switchTab('terminal'); clearLog(); disableButtons();
+    S.socket.emit('apply', { agentId: S.currentAgentId });
+  } else {
+    toast(`Saved to ${res.path.split('/').pop()}${res.created ? ' (new file)' : ''} — click Apply to push`, 'success');
+  }
 }
 
 async function openSiteFile(confPath) {
@@ -1192,7 +1426,7 @@ function openSiteModal(site = null) {
 
   // Reset
   document.getElementById('s-name').value       = site?.name       || '';
-  document.getElementById('s-type').value       = site?.type       || 'proxy';
+  document.getElementById('s-type').value       = site?.type       || 'static';
   document.getElementById('s-servername').value = site?.serverName || '';
   document.getElementById('s-port').value       = site?.listenPort || 80;
   document.getElementById('s-staticroot').value = site?.staticRoot || '/var/www/html';
@@ -1354,8 +1588,7 @@ async function deleteSite(siteId) {
   const s = S.sites.find(s => s.id === siteId);
   if (!s) return;
   const msg = s.discovered
-    ? `Delete ${s.confPath} from the server on the next Apply?` +
-      (s.blocksInFile > 1 ? `\n\nThat file contains ${s.blocksInFile} server blocks — all of them will be removed.` : '')
+    ? `Remove "${s.name}" (${s.serverName}) from ${s.confPath}?\n\nIts header, server blocks${s.upstreamName && !s.upstreamShared ? ' and upstream pool' : ''} are removed on the next Apply; the rest of the file is untouched.`
     : `Delete site "${s.name}"? Its config file is removed from the server on the next Apply.`;
   if (!confirm(msg)) return;
   await apiFetch(`/api/agents/${S.currentAgentId}/sites/${encodeURIComponent(siteId)}`, { method: 'DELETE' });

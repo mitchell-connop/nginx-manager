@@ -10,7 +10,8 @@ Built for ConnopNetworking homelab infrastructure.
 - ➕ **Manual enrolment** — servers are added by hand in the UI; each gets its own agent token. Agents with unknown tokens are rejected.
 - 🔐 **No passwords in the repo or on disk** — no SSH, no host credentials. Agent tokens are stored only as SHA-256 hashes; the admin password as a bcrypt hash.
 - 📄 **Config editor** — edit every file nginx references, as reported by the agent
-- 🏗️ **Visual Site Builder** — every server block on the server is listed live; create reverse proxy / static / redirect sites with SSL + HSTS
+- 🔀 **Reverse proxies** — add and edit sites from a popup; they live in `conf.d/reverse-proxies.conf` (created if missing), edited in place with a live diff preview
+- 🏗️ **Visual Site Builder** — every server block on the server is listed live; static sites and redirects get their own generated file
 - 🔐 **Certificates** — every cert nginx references, live, with SANs, issuer, expiry and which sites use it; upload new cert/key pairs
 - 📤 **Apply** — staged changes are pushed in one go; the agent writes them, runs `nginx -t`, reloads, and **rolls back automatically** if anything fails
 - 🔄 **Live, no scanning** — the Builder, Certificates and Raw Configs tabs are derived from what the agent reports, so hand edits on the server show up within seconds (agent file watcher)
@@ -91,7 +92,9 @@ Edit `.env` (see `.env.example`):
 
 - **Allowed directories** — the agent can only read/write files under its `allowed_directories`. The generated config allows `/etc/nginx`, `/etc/letsencrypt` and `/etc/ssl/nginx` (plus nginx's runtime/log dirs). Upload certificates to a path under one of those, e.g. `/etc/nginx/ssl/`.
 - **Upgrading from v1 (SSH)** — on first start, stored SSH passwords are removed from `data/agents.json`. Open each server, click **🔑 Agent Setup → New Token**, and run the setup on that server.
-- **Builder vs. hand-written sites** — sites created in the Visual Builder own their whole generated `.conf` file and are edited in the form. Server blocks from any other file are shown as read-only cards ("from file") and edited in Raw Configs: regenerating them from the form would drop directives the builder doesn't model (upstream keepalive, `proxy_next_upstream`, maps…).
+- **Reverse proxies are edited in place** — a site is the `# ===` header comment plus its `upstream` (if any), HTTP→HTTPS redirect and HTTPS `server` blocks, grouped by `server_name`. The popup only rewrites the directives its fields own (`server_name`, upstream `server` lines, `proxy_pass`, cert paths, timeouts, body size, HSTS, WebSocket headers); comments and everything else — keepalive, `proxy_next_upstream`, … — stay byte-for-byte. New proxies are appended to `conf.d/reverse-proxies.conf` in the same layout. Sites whose `proxy_pass` uses variables, and non-proxy server blocks, are read-only cards that open the file.
+- **Applying** writes the files, runs `nginx -t` and does a graceful `nginx -s reload` (no dropped connections). The agent then watches the error log for ~10 s before reporting success, and rolls back if anything fails. **Save & Apply** in the popup does both in one click.
+- **Static sites and redirects** made in the builder own their whole generated `.conf` file and are edited in the form.
 - **Data** lives in `./data/` (git-ignored, mode 700): server list, synced file contents, uploaded-cert labels, builder site definitions, and the gRPC TLS material. Synced files can include TLS private keys referenced by nginx — protect backups accordingly.
 - `proto/` contains the NGINX Agent `mpi.v1` protobuf definitions (Apache-2.0, from [nginx/agent](https://github.com/nginx/agent)) with `buf.validate` annotations removed.
 

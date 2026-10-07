@@ -43,6 +43,8 @@ const store = require('./lib/store');
 const { ensureTls } = require('./lib/tls');
 const { ManagementPlane } = require('./lib/mpi');
 const { siteToNginxConf, parseNginxConf } = require('./lib/nginxconf');
+const proxyfile = require('./lib/proxyfile');
+const { unifiedDiff } = require('./lib/linediff');
 
 // ---------------------------------------------------------------------------
 // Config
@@ -600,40 +602,170 @@ function resolveCertPaths(agentId, site) {
   return site;
 }
 
+// Reverse proxies live in one hand-maintainable file; new ones are appended to it.
+function reverseProxiesPath(agent) { return path.posix.join(confDir(agent), 'reverse-proxies.conf'); }
+
+// Does any config define `map $http_upgrade $connection_upgrade`? New WebSocket proxies
+// then use it (keeps upstream keepalive working) instead of a hardcoded "upgrade".
+function hasConnectionUpgradeMap(agentId) {
+  const { files } = parsedConfFiles(agentId);
+  const st = store.readState(agentId);
+  return files.some(f => /map\s+\$http_upgrade\s+\$connection_upgrade/.test(readFileContent(st, f.path) || ''));
+}
+
+function siteId(confPath, key) { return `file:${confPath}#${key}`; }
+
+function splitSiteId(id) {
+  const m = /^file:(\/[^#]+)#(.+)$/.exec(id);
+  if (!m) return null;
+  const confPath = cleanRemotePath(m[1]);
+  return confPath ? { confPath, key: m[2] } : null;
+}
+
+// Server blocks from every .conf file, grouped into sites by server_name.
+function discoveredSites(agent) {
+  const { st, files } = parsedConfFiles(agent.id);
+  const managedPaths = new Set(builderSites(agent.id).map(s => s.confPath || siteConfPath(agent, s)));
+  const out = [];
+  for (const f of files) {
+    if (managedPaths.has(f.path)) continue;
+    const content = readFileContent(st, f.path);
+    let sites;
+    try { sites = proxyfile.findSites(content).map(proxyfile.publicSite); }
+    catch { sites = null; }
+    if (!sites) {
+      // unparseable file — fall back to the lightweight parser, read-only
+      f.sites.forEach((x, i) => out.push({ ...x, id: siteId(f.path, `#${i}`), confPath: f.path, discovered: true,
+        editable: false, readOnlyReason: 'Could not parse this file — edit it in Raw Configs', fileStatus: f.status }));
+      continue;
+    }
+    for (const x of sites) {
+      out.push({
+        ...x,
+        id: siteId(f.path, x.key),
+        name: x.label,
+        upstream: x.backends,
+        confPath: f.path,
+        discovered: true,
+        fileStatus: f.status,
+      });
+    }
+  }
+  return out;
+}
+
+function allServerNames(agent) {
+  return new Set(discoveredSites(agent).flatMap(s => (s.serverName || '').split(/\s+/)).filter(Boolean)
+    .concat(builderSites(agent.id).flatMap(s => (s.serverName || '').split(/\s+/)).filter(Boolean)));
+}
+
+// Fields accepted from the reverse-proxy popup
+function proxyFields(b) {
+  const f = {};
+  for (const k of ['name', 'serverName', 'backendScheme', 'backendPath', 'lbMethod', 'certFile', 'keyFile', 'clientMaxBodySize']) {
+    if (b[k] !== undefined) f[k] = String(b[k]).trim();
+  }
+  if (Array.isArray(b.backends)) f.backends = b.backends.map(String);
+  for (const k of ['ssl', 'hsts', 'websockets', 'httpRedirect']) if (b[k] !== undefined) f[k] = !!b[k];
+  if (b.proxyReadTimeout !== undefined) f.proxyReadTimeout = b.proxyReadTimeout === '' || b.proxyReadTimeout === null ? '' : String(b.proxyReadTimeout);
+  if (b.listenPort !== undefined) f.listenPort = parseInt(b.listenPort, 10);
+  if (b.certId) {
+    const cert = deriveCerts(b._agentId).find(c => c.id === b.certId);
+    if (cert) { f.certFile = cert.remoteCertPath; f.keyFile = cert.remoteKeyPath || f.keyFile; }
+  }
+  return f;
+}
+
+// Compute the new contents of the target file for a create/edit, without saving.
+function planProxyChange(agent, siteIdOrNull, body) {
+  const f = proxyFields({ ...body, _agentId: agent.id });
+  const ctx = { connectionUpgradeMap: hasConnectionUpgradeMap(agent.id) };
+  const st = store.readState(agent.id);
+  if (siteIdOrNull) {
+    const ref = splitSiteId(siteIdOrNull);
+    if (!ref) throw Object.assign(new Error('bad site id'), { status: 400 });
+    const before = readFileContent(st, ref.confPath);
+    if (typeof before !== 'string') throw Object.assign(new Error('File not synced from the agent yet'), { status: 409 });
+    if (f.serverName !== undefined) {
+      const current = proxyfile.findSites(before).find(x => x.key === ref.key);
+      const mine = new Set(((current && current.serverName) || '').split(/\s+/));
+      const taken = allServerNames(agent);
+      const clash = f.serverName.split(/\s+/).find(n => taken.has(n) && !mine.has(n));
+      if (clash) throw Object.assign(new Error(`${clash} is already used by another site`), { status: 409 });
+    }
+    const after = proxyfile.editSite(before, ref.key, f, ctx);
+    return { path: ref.confPath, before, after };
+  }
+  const target = reverseProxiesPath(agent);
+  const existing = readFileContent(st, target);
+  if (existing === undefined) throw Object.assign(new Error('reverse-proxies.conf not synced from the agent yet'), { status: 409 });
+  const before = existing || '';
+  const taken = allServerNames(agent);
+  const clash = (f.serverName || '').split(/\s+/).find(n => n && taken.has(n));
+  if (clash) throw Object.assign(new Error(`${clash} is already used by another site`), { status: 409 });
+  const after = proxyfile.addSite(before, f, ctx);
+  return { path: target, before, after, created: existing === null };
+}
+
+function sendError(res, err) {
+  res.status(err.status || 400).json({ error: err.message });
+}
+
 app.get('/api/agents/:id/sites', requireAuth, (req, res) => {
   const agent = requireAgent(req, res); if (!agent) return;
-  const { st, files } = parsedConfFiles(agent.id);
+  const { st } = parsedConfFiles(agent.id);
   const managed = builderSites(agent.id).map(s => {
     const p = s.confPath || siteConfPath(agent, s);
     return { ...s, confPath: p, managed: true, fileStatus: fileStatus(st, p) };
   });
-  const managedPaths = new Set(managed.map(s => s.confPath));
-  const discovered = [];
-  for (const f of files) {
-    if (managedPaths.has(f.path)) continue;
-    f.sites.forEach((s, i) => discovered.push({
-      ...s,
-      id: `file:${f.path}#${i}`,
-      confPath: f.path,
-      discovered: true,
-      fileStatus: f.status,
-      blocksInFile: f.sites.length,
-    }));
-  }
-  res.json([...managed, ...discovered]);
+  res.json([...managed, ...discoveredSites(agent)]);
 });
 
+// Preview a reverse-proxy create/edit as a diff of the target file
+app.post('/api/agents/:id/proxies/preview', requireAuth, (req, res) => {
+  const agent = requireAgent(req, res); if (!agent) return;
+  try {
+    const plan = planProxyChange(agent, req.body && req.body.siteId, req.body || {});
+    res.json({ path: plan.path, created: !!plan.created, diff: unifiedDiff(plan.before, plan.after) });
+  } catch (err) { sendError(res, err); }
+});
+
+// New reverse proxy → appended to conf.d/reverse-proxies.conf (created if missing)
+app.post('/api/agents/:id/proxies', requireAuth, (req, res) => {
+  const agent = requireAgent(req, res); if (!agent) return;
+  try {
+    const plan = planProxyChange(agent, null, req.body || {});
+    store.stageFile(agent.id, plan.path, plan.after);
+    io.emit('files', { agentId: agent.id });
+    io.emit('agents');
+    res.json({ ok: true, path: plan.path, created: !!plan.created });
+  } catch (err) { sendError(res, err); }
+});
+
+// Edit a reverse proxy in place (only the directives the popup owns are rewritten)
+app.put('/api/agents/:id/proxies', requireAuth, (req, res) => {
+  const agent = requireAgent(req, res); if (!agent) return;
+  try {
+    const plan = planProxyChange(agent, req.body && req.body.siteId, req.body || {});
+    if (plan.after !== plan.before) store.stageFile(agent.id, plan.path, plan.after);
+    io.emit('files', { agentId: agent.id });
+    io.emit('agents');
+    res.json({ ok: true, path: plan.path, changed: plan.after !== plan.before });
+  } catch (err) { sendError(res, err); }
+});
+
+// Builder sites (static / redirect) — whole generated file
 app.post('/api/agents/:id/sites', requireAuth, (req, res) => {
   const agent = requireAgent(req, res); if (!agent) return;
   const b = req.body || {};
   const site = resolveCertPaths(agent.id, {
     id:              uuidv4(),
     name:            b.name            || 'New Site',
-    type:            b.type            || 'proxy',      // proxy | static | redirect
+    type:            b.type === 'redirect' ? 'redirect' : 'static',
     serverName:      b.serverName      || '',
     listenPort:      b.listenPort      || 80,
-    upstream:        b.upstream        || [],           // array of host:port
-    lbMethod:        b.lbMethod        || 'round_robin',
+    upstream:        [],
+    lbMethod:        'round_robin',
     staticRoot:      b.staticRoot      || '/var/www/html',
     redirectTo:      b.redirectTo      || '',
     ssl:             b.ssl             || false,
@@ -641,8 +773,8 @@ app.post('/api/agents/:id/sites', requireAuth, (req, res) => {
     certFile:        b.certFile        || '',           // remote path
     keyFile:         b.keyFile         || '',           // remote path
     hsts:            b.hsts            || false,
-    proxyTimeout:    b.proxyTimeout    || 60,
-    proxyBuffering:  b.proxyBuffering  !== false,
+    proxyTimeout:    60,
+    proxyBuffering:  true,
     extraDirectives: b.extraDirectives || '',
     enabled:         b.enabled         !== false,
     createdAt:       new Date().toISOString(),
@@ -662,9 +794,6 @@ app.post('/api/agents/:id/sites', requireAuth, (req, res) => {
 
 app.put('/api/agents/:id/sites/:siteId', requireAuth, (req, res) => {
   const agent = requireAgent(req, res); if (!agent) return;
-  if (req.params.siteId.startsWith('file:')) {
-    return res.status(400).json({ error: 'This site comes from a hand-written config file — edit it in Raw Configs' });
-  }
   const existing = store.readSite(agent.id, req.params.siteId);
   if (!existing || existing.importedFrom) return res.status(404).json({ error: 'Site not found' });
 
@@ -683,14 +812,21 @@ app.put('/api/agents/:id/sites/:siteId', requireAuth, (req, res) => {
 });
 
 // Builder site: forget it and delete its generated file.
-// Discovered site (id "file:<path>#n"): delete the whole file it lives in.
+// Discovered site ("file:<path>#<key>"): remove just that site's blocks from the file.
 app.delete('/api/agents/:id/sites/:siteId', requireAuth, (req, res) => {
   const agent = requireAgent(req, res); if (!agent) return;
   const id = req.params.siteId;
   if (id.startsWith('file:')) {
-    const confPath = cleanRemotePath(id.slice(5).replace(/#\d+$/, ''));
-    if (!confPath) return res.status(400).json({ error: 'bad site id' });
-    store.stageDelete(agent.id, confPath);
+    const ref = splitSiteId(id);
+    if (!ref) return res.status(400).json({ error: 'bad site id' });
+    const st = store.readState(agent.id);
+    const before = readFileContent(st, ref.confPath);
+    if (typeof before !== 'string') return res.status(409).json({ error: 'File not synced from the agent yet' });
+    let after;
+    try { after = proxyfile.removeSite(before, ref.key); }
+    catch (err) { return sendError(res, err); }
+    if (after.trim()) store.stageFile(agent.id, ref.confPath, after);
+    else store.stageDelete(agent.id, ref.confPath);
   } else {
     const site = store.readSite(agent.id, id);
     if (!site) return res.status(404).json({ error: 'Site not found' });
@@ -702,7 +838,7 @@ app.delete('/api/agents/:id/sites/:siteId', requireAuth, (req, res) => {
   res.json({ ok: true });
 });
 
-// Preview generated config without saving
+// Preview generated config for a builder (static/redirect) site without saving
 app.post('/api/agents/:id/sites/preview', requireAuth, (req, res) => {
   const agent = requireAgent(req, res); if (!agent) return;
   try {
