@@ -1200,7 +1200,7 @@ function vipPill(gKey) {
 async function setGroupVip(gKey) {
   closeCtxMenu();
   const cur = S.groups[gKey];
-  const input = prompt(`Virtual IP (keepalived) for group "${gKey}" — e.g. 172.16.40.50 or 172.16.40.50:443.\nLeave empty to remove.`,
+  const input = prompt(`Virtual IP (keepalived) for group "${gKey}" — e.g. 192.0.2.50 or 192.0.2.50:443.\nLeave empty to remove.`,
     cur?.vip ? `${cur.vip}${cur.port && cur.port !== 443 ? ':' + cur.port : ''}` : '');
   if (input === null) return;
   const [vip, port] = input.trim().split(':');

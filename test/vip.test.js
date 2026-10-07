@@ -65,8 +65,8 @@ test('reads complete entries from /proc/net/arp format', () => {
 
 test('agent address from the gRPC peer string', () => {
   const call = p => ({ getPeer: () => p });
-  assert.equal(peerAddress(call('172.16.40.52:52190')), '172.16.40.52');
-  assert.equal(peerAddress(call('[::ffff:172.16.40.52]:52190')), '172.16.40.52');
+  assert.equal(peerAddress(call('192.0.2.52:52190')), '192.0.2.52');
+  assert.equal(peerAddress(call('[::ffff:192.0.2.52]:52190')), '192.0.2.52');
   assert.equal(peerAddress(call('ipv4:10.0.0.5:443')), '10.0.0.5');
   assert.equal(peerAddress(call('[2001:db8::1]:443')), '2001:db8::1');
   assert.equal(peerAddress({}), null);

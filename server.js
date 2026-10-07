@@ -391,7 +391,7 @@ app.get('/api/groups', requireAuth, (req, res) => {
   res.json(groupList().map(g => ({ ...g, status: vipMonitor.status.get(g.name) || null })));
 });
 
-// Set or clear a group's VIP: { vip: "172.16.40.50" | "", port?: 443 }
+// Set or clear a group's VIP: { vip: "192.0.2.50" | "", port?: 443 }
 app.put('/api/groups/:name', requireAuth, async (req, res) => {
   const name = String(req.params.name).trim();
   if (!name) return res.status(400).json({ error: 'group name required' });
