@@ -377,6 +377,12 @@
             </div>
           </div>
           <div class="sites-grid" id="sites-grid"></div>
+
+          <div class="section-header" style="margin-top:26px">
+            <span class="section-title">Forward proxies <span class="badge badge-info" id="fp-req" style="margin-left:6px;text-transform:none;letter-spacing:0"></span></span>
+            <button class="btn-primary btn-sm" id="fp-add" onclick="openFwdModal()">＋ Add Forward Proxy</button>
+          </div>
+          <div class="sites-grid" id="fp-grid"></div>
         </div>
 
         <!-- ── CERTIFICATES TAB ── -->
@@ -576,6 +582,66 @@
       <button class="btn-secondary" id="px-openfile" onclick="pxOpenFile()">📄 Open file</button>
       <button class="btn-primary" onclick="pxSave(false)">💾 Save</button>
       <button class="btn-success" onclick="pxSave(true)" title="Save, then push: the agent runs nginx -t and reloads, rolling back on failure">📤 Save &amp; Apply</button>
+    </div>
+  </div>
+</div>
+
+<!-- ─── FORWARD PROXY MODAL ─── -->
+<div class="modal-backdrop" id="fp-modal">
+  <div class="modal modal-wide">
+    <h3 id="fp-title">🧭 Add Forward Proxy</h3>
+    <p style="font-size:.82rem;color:var(--text-dim);margin:-6px 0 14px">
+      HTTPS forward proxy using nginx's <code>ngx_http_tunnel_module</code> (nginx ≥ 1.31.0): clients send <code>CONNECT host:443</code>
+      and nginx tunnels the encrypted connection. Plain <code>http://</code> through the proxy isn't supported by the module.
+      Saved to <span class="mono" id="fp-file"></span>.
+    </p>
+    <div class="form-row">
+      <div class="form-group"><label>Name <span class="req">*</span></label><input type="text" id="fp-name" placeholder="OFFICE PROXY" oninput="fpPreview()" /></div>
+      <div class="form-group"><label>Listen <span class="req">*</span></label><input type="text" id="fp-listen" placeholder="3128 or 192.0.2.10:3128" oninput="fpPreview()" /></div>
+    </div>
+
+    <div style="border-top:1px solid var(--border);padding-top:12px">
+      <div style="font-size:.78rem;color:var(--text-dim);text-transform:uppercase;letter-spacing:.8px;margin-bottom:8px">Who may use it</div>
+      <div class="form-group"><label>Client networks</label>
+        <input type="text" id="fp-networks" placeholder="10.0.0.0/24 192.0.2.0/24" oninput="fpPreview()" />
+        <div class="form-hint">IPs or CIDRs (space/comma separated). Everyone else gets 403. Leave empty only if you require a login.</div></div>
+      <div class="form-group"><label>Login (proxy authentication)</label>
+        <div id="fp-users"></div>
+        <button class="btn-secondary btn-sm" style="margin-top:6px" onclick="fpAddUser()">＋ Add user</button>
+        <div class="form-hint">Passwords are stored only as bcrypt hashes in an htpasswd file deployed next to the config. Leave a password blank to keep it.</div></div>
+      <div class="form-group" style="max-width:50%"><label>Login prompt (realm)</label><input type="text" id="fp-realm" value="Proxy" oninput="fpPreview()" /></div>
+    </div>
+
+    <div style="border-top:1px solid var(--border);padding-top:12px">
+      <div style="font-size:.78rem;color:var(--text-dim);text-transform:uppercase;letter-spacing:.8px;margin-bottom:8px">Where they may go</div>
+      <div class="form-row">
+        <div class="form-group"><label>Destination ports</label><input type="text" id="fp-ports" value="443" oninput="fpPreview()" /></div>
+        <div class="form-group"><label>Destination hosts</label><input type="text" id="fp-hosts" placeholder="(any) e.g. github.com *.ubuntu.com" oninput="fpPreview()" /></div>
+      </div>
+      <div class="toggle-group"><label for="fp-noip">Block IP-address destinations (name-based allowlists can't be bypassed with an IP)</label>
+        <label class="toggle"><input type="checkbox" id="fp-noip" checked onchange="fpPreview()" /><span class="toggle-slider"></span></label></div>
+      <div class="form-hint" style="margin-bottom:10px">⚠ Destinations are matched by name. With "any" host, allowed clients can also reach internal services by their DNS names.</div>
+    </div>
+
+    <div style="border-top:1px solid var(--border);padding-top:12px">
+      <div class="form-row">
+        <div class="form-group"><label>DNS resolver(s) <span class="req">*</span></label><input type="text" id="fp-resolver" value="1.1.1.1 1.0.0.1" oninput="fpPreview()" />
+          <div class="form-hint">nginx resolves CONNECT destinations itself.</div></div>
+        <div class="form-group"><label>Connect timeout (s)</label><input type="number" id="fp-connect" value="10" min="1" max="75" oninput="fpPreview()" /></div>
+        <div class="form-group"><label>Idle timeout (s)</label><input type="number" id="fp-idle" value="300" min="5" oninput="fpPreview()" /></div>
+      </div>
+      <div class="toggle-group"><label for="fp-log">Access log</label>
+        <label class="toggle"><input type="checkbox" id="fp-log" checked onchange="fpPreview()" /><span class="toggle-slider"></span></label></div>
+    </div>
+
+    <div style="margin-top:8px">
+      <div style="font-size:.78rem;color:var(--text-dim);text-transform:uppercase;letter-spacing:.8px;margin-bottom:6px">Change to <span class="mono" id="fp-target" style="text-transform:none;letter-spacing:0"></span></div>
+      <pre class="preview-pane" id="fp-preview" style="white-space:pre;overflow:auto;max-height:260px"></pre>
+    </div>
+    <div class="modal-actions">
+      <button class="btn-secondary" onclick="document.getElementById('fp-modal').classList.remove('open')">Cancel</button>
+      <button class="btn-primary" onclick="fpSave(false)">💾 Save</button>
+      <button class="btn-success" onclick="fpSave(true)">📤 Save &amp; Apply</button>
     </div>
   </div>
 </div>
@@ -909,7 +975,7 @@ function initSocket() {
     if (mc) { mc.log = [...(mc.log || []), line].slice(-50); const el = document.getElementById(`mclog-${cssId(id)}`); if (el) { el.textContent = mc.log.join('\n'); el.scrollTop = el.scrollHeight; } }
   });
   S.socket.on('files', debounce(({ agentId } = {}) => {
-    if (agentId === S.currentAgentId) { loadConfigs(); loadCerts(); loadSites(); }
+    if (agentId === S.currentAgentId) { loadConfigs(); loadCerts(); loadSites(); loadForwardProxies(); }
   }, 300));
 }
 
@@ -1054,7 +1120,7 @@ async function selectAgent(id) {
   document.getElementById('editor-section').style.display = 'none';
   clearLog();
   switchTab('builder');
-  await Promise.all([loadSites(), loadCerts(), loadConfigs()]);
+  await Promise.all([loadSites(), loadCerts(), loadConfigs(), loadForwardProxies()]);
 }
 
 function currentAgent() { return S.agents.find(a => a.id === S.currentAgentId); }
@@ -1555,6 +1621,151 @@ async function pxSave(apply) {
   } else {
     toast(`Saved to ${res.path.split('/').pop()}${res.created ? ' (new file)' : ''} — click Apply to push`, 'success');
   }
+}
+
+// ── Forward proxies ──────────────────────────────────
+let _fp = { data: null, key: null, confPath: null, timer: null };
+
+async function loadForwardProxies() {
+  if (!S.currentAgentId) return;
+  const agentId = S.currentAgentId;
+  const d = await apiFetch(`/api/agents/${agentId}/forward-proxies`);
+  if (agentId !== S.currentAgentId || !d) return;
+  _fp.data = d;
+  renderForwardProxies();
+}
+
+function renderForwardProxies() {
+  const d = _fp.data; if (!d) return;
+  const req = document.getElementById('fp-req');
+  req.className = `badge ${d.supported ? 'badge-success' : 'badge-warn'}`;
+  req.textContent = d.supported ? `nginx ${d.version} ✓ (needs ≥ ${d.minVersion})` : `needs nginx ≥ ${d.minVersion} — this server runs ${d.version || 'unknown'}`;
+  req.title = 'Forward proxying uses ngx_http_tunnel_module, added in nginx 1.31.0 (built by default unless nginx was configured --without-http_tunnel_module).';
+  const add = document.getElementById('fp-add');
+  add.disabled = !d.supported;
+  add.title = d.supported ? '' : `Upgrade this server to nginx ${d.minVersion}+ (nginx.org mainline packages) to add forward proxies`;
+  const grid = document.getElementById('fp-grid');
+  if (!d.proxies.length) {
+    grid.innerHTML = `<div class="empty-state" style="grid-column:1/-1;padding:20px"><div class="icon">🧭</div>
+      <p style="font-size:.85rem">${d.supported ? 'No forward proxies. <strong>＋ Add Forward Proxy</strong> lets clients tunnel HTTPS through this server.'
+        : `Forward proxies need nginx ${esc(d.minVersion)} or newer. This server runs nginx ${esc(d.version || 'unknown')} — upgrade it (nginx.org mainline) to enable this section.`}</p></div>`;
+    return;
+  }
+  grid.innerHTML = d.proxies.map(p => `
+    <div class="site-card">
+      <div class="site-card-header"><span class="site-card-icon">🧭</span>
+        <div style="flex:1;min-width:0"><div class="site-card-title">${esc(p.label)}</div><div class="site-card-host">listen ${esc(p.listen)}</div></div></div>
+      <div class="site-card-badges">
+        <span class="badge badge-info" title="${esc(p.confPath)}">📄 ${esc(p.confPath.split('/').pop())}</span>
+        ${p.fileStatus !== 'live' ? `<span class="badge badge-warn">● ${p.fileStatus === 'added' ? 'new' : p.fileStatus}, unapplied</span>` : ''}
+        ${p.openToAll && !p.users.length ? '<span class="badge badge-danger">⚠ open proxy</span>' : ''}
+        ${p.users.length ? `<span class="badge badge-success">🔑 ${p.users.length} user${p.users.length === 1 ? '' : 's'}</span>` : ''}
+        ${p.blockIpLiterals ? '<span class="badge badge-accent">no IP destinations</span>' : ''}
+      </div>
+      <div style="font-size:.75rem;color:var(--text-dim);font-family:var(--mono);line-height:1.6">
+        clients: ${esc(p.allowNetworks.join(', ') || (p.users.length ? 'anyone with a login' : 'anyone'))}<br>
+        to: ${esc(p.anyHost ? 'any host' : p.allowedHosts.join(', '))} : ${esc(p.allowedPorts.join(', ') || 'any port')}
+      </div>
+      <div class="site-card-actions">
+        ${p.managed && d.supported ? `<button class="btn-secondary btn-sm" onclick="openFwdModal('${esc(p.key)}')">✏️ Edit</button>` : ''}
+        <button class="btn-secondary btn-sm" onclick="openSiteFile('${esc(p.confPath)}')" title="Open ${esc(p.confPath)}">📄</button>
+        ${p.fileStatus !== 'live' ? `<button class="btn-primary btn-sm" onclick="doApply()">📤 Apply</button>` : ''}
+        ${p.fileStatus !== 'deleted' ? `<button class="btn-danger btn-sm" onclick="fpDelete('${esc(p.key)}')">🗑</button>` : ''}
+      </div>
+    </div>`).join('');
+}
+
+function fpRenderUsers(users) {
+  const el = document.getElementById('fp-users');
+  el.innerHTML = '';
+  users.forEach(u => {
+    const row = document.createElement('div');
+    row.className = 'upstream-item';
+    row.innerHTML = `<input type="text" data-u="name" placeholder="username" style="max-width:40%" ${u.existing ? 'readonly' : ''} />
+      <input type="password" data-u="pw" placeholder="${u.existing ? '(unchanged)' : 'password (10+ characters)'}" autocomplete="new-password" />
+      <button class="btn-danger btn-xs" onclick="this.closest('.upstream-item').remove(); fpPreview()">✕</button>`;
+    row.querySelector('[data-u=name]').value = u.username || '';
+    row.querySelectorAll('input').forEach(i => i.addEventListener('input', () => fpPreview()));
+    el.appendChild(row);
+  });
+}
+function fpUsers() {
+  return [...document.querySelectorAll('#fp-users .upstream-item')].map(r => ({
+    username: r.querySelector('[data-u=name]').value.trim(), password: r.querySelector('[data-u=pw]').value,
+  })).filter(u => u.username);
+}
+function fpAddUser() {
+  const cur = [...document.querySelectorAll('#fp-users .upstream-item')].map(r => ({
+    username: r.querySelector('[data-u=name]').value, existing: r.querySelector('[data-u=name]').readOnly }));
+  fpRenderUsers([...cur, { username: '' }]);
+}
+
+function openFwdModal(key = null) {
+  const d = _fp.data;
+  const p = key ? d.proxies.find(x => x.key === key) : null;
+  _fp.key = key; _fp.confPath = p ? p.confPath : null;
+  const set = (id, v) => { document.getElementById(id).value = v; };
+  document.getElementById('fp-title').textContent = p ? `✏️ Edit ${p.label}` : '🧭 Add Forward Proxy';
+  document.getElementById('fp-file').textContent = p ? p.confPath : d.file;
+  set('fp-name', p?.label || ''); set('fp-listen', p?.listen || '3128');
+  set('fp-networks', (p?.allowNetworks || []).join(' ')); set('fp-realm', p?.authRealm || 'Proxy');
+  set('fp-ports', (p?.allowedPorts?.length ? p.allowedPorts : [443]).join(' '));
+  set('fp-hosts', (p?.allowedHosts || []).join(' '));
+  set('fp-resolver', p?.resolver || '1.1.1.1 1.0.0.1');
+  set('fp-connect', p?.connectTimeout || 10); set('fp-idle', p?.idleTimeout || 300);
+  document.getElementById('fp-noip').checked = p ? p.blockIpLiterals : true;
+  document.getElementById('fp-log').checked = p ? p.accessLog : true;
+  fpRenderUsers((p?.users || []).map(u => ({ username: u, existing: true })));
+  document.getElementById('fp-modal').classList.add('open');
+  fpPreview(0);
+}
+
+function fpBody() {
+  const v = id => document.getElementById(id).value.trim();
+  return {
+    key: _fp.key || undefined, confPath: _fp.confPath || undefined,
+    fields: {
+      name: v('fp-name'), listen: v('fp-listen'), allowNetworks: v('fp-networks'), authRealm: v('fp-realm') || 'Proxy',
+      users: fpUsers(), allowedPorts: v('fp-ports'), allowedHosts: v('fp-hosts'),
+      blockIpLiterals: document.getElementById('fp-noip').checked, resolver: v('fp-resolver'),
+      connectTimeout: v('fp-connect'), idleTimeout: v('fp-idle'), accessLog: document.getElementById('fp-log').checked,
+    },
+  };
+}
+
+function fpPreview(delay = 300) {
+  clearTimeout(_fp.timer);
+  _fp.timer = setTimeout(async () => {
+    const pre = document.getElementById('fp-preview');
+    const res = await apiFetch(`/api/agents/${S.currentAgentId}/forward-proxies/preview`, { method: 'POST', body: fpBody() });
+    if (!res) { pre.textContent = '# preview unavailable'; return; }
+    document.getElementById('fp-target').textContent = res.path || '';
+    if (res.error) { pre.innerHTML = `<span style="color:var(--warn)">⚠ ${esc(res.error)}</span>`; return; }
+    const head = [res.created ? '# new file' : null, res.authFile ? `# users → ${res.authFile}: ${res.users.join(', ')} (bcrypt)` : null].filter(Boolean);
+    pre.innerHTML = head.map(h => `<span style="color:var(--text-dim)">${esc(h)}</span>`).join('\n') + (head.length ? '\n' : '') +
+      (res.diff || '# no changes').split('\n').map(l => {
+        const c = l.startsWith('@@') ? 'var(--accent2)' : l.startsWith('+') ? 'var(--success)' : l.startsWith('-') ? 'var(--danger)' : 'var(--text-dim)';
+        return `<span style="color:${c}">${esc(l)}</span>`;
+      }).join('\n');
+  }, delay);
+}
+
+async function fpSave(apply) {
+  const res = await apiFetch(`/api/agents/${S.currentAgentId}/forward-proxies`, { method: _fp.key ? 'PUT' : 'POST', body: fpBody() });
+  if (!res?.ok) { toast(`❌ ${res?.error || 'Save failed'}`, 'error'); return; }
+  document.getElementById('fp-modal').classList.remove('open');
+  await Promise.all([loadForwardProxies(), loadConfigs(), loadAgents()]);
+  if (apply) { switchTab('terminal'); clearLog(); disableButtons(); S.socket.emit('apply', { agentId: S.currentAgentId }); }
+  else toast(`Saved to ${res.path.split('/').pop()} — click Apply to push`, 'success');
+}
+
+async function fpDelete(key) {
+  const p = _fp.data.proxies.find(x => x.key === key);
+  if (!confirm(`Remove forward proxy "${p.label}" (listen ${p.listen})${p.authFile ? ' and its user file' : ''} on the next Apply?`)) return;
+  const res = await apiFetch(`/api/agents/${S.currentAgentId}/forward-proxies?key=${encodeURIComponent(key)}&path=${encodeURIComponent(p.confPath)}`, { method: 'DELETE' });
+  if (!res?.ok) { toast(`❌ ${res?.error || 'failed'}`, 'error'); return; }
+  toast('Marked for removal — click Apply to push', 'info');
+  await Promise.all([loadForwardProxies(), loadConfigs(), loadAgents()]);
 }
 
 async function openSiteFile(confPath) {

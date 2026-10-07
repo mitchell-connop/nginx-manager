@@ -48,6 +48,7 @@ const { unifiedDiff } = require('./lib/linediff');
 const { VipMonitor } = require('./lib/vip');
 const { CertManager } = require('./lib/certmanager');
 const issuers = require('./lib/issuers');
+const fwdproxy = require('./lib/fwdproxy');
 
 // ---------------------------------------------------------------------------
 // Config
@@ -650,6 +651,127 @@ app.delete('/api/agents/:id/certs', requireAuth, (req, res) => {
   }
   store.writeState(agent.id, st);
   store.writeCerts(agent.id, store.readCerts(agent.id).filter(c => c.remoteCertPath !== certPath));
+  io.emit('files', { agentId: agent.id });
+  io.emit('agents');
+  res.json({ ok: true });
+});
+
+// ---------------------------------------------------------------------------
+// Forward proxies (CONNECT tunnels, ngx_http_tunnel_module) — nginx 1.31.0+
+// ---------------------------------------------------------------------------
+function forwardProxiesPath(agent) { return path.posix.join(confDir(agent), 'forward-proxies.conf'); }
+
+function forwardSupport(agent) {
+  const a = store.findAgent(agent.id) || agent;
+  return {
+    minVersion: fwdproxy.MIN_VERSION,
+    version: a.nginxVersion || null,
+    supported: fwdproxy.versionAtLeast(a.nginxVersion),
+  };
+}
+
+function requireForwardSupport(agent, res) {
+  const s = forwardSupport(agent);
+  if (s.supported) return true;
+  res.status(409).json({
+    error: `Forward proxies need nginx ${s.minVersion} or newer (ngx_http_tunnel_module) — ` +
+      (s.version ? `${agent.name} runs nginx ${s.version}` : `${agent.name} hasn't reported its nginx version yet`),
+  });
+  return false;
+}
+
+function discoveredForwardProxies(agent) {
+  const st = store.readState(agent.id);
+  const out = [];
+  for (const name of Object.keys(store.desiredFiles(st)).filter(n => n.endsWith('.conf')).sort()) {
+    const text = readFileContent(st, name);
+    if (typeof text !== 'string' || !text.includes('tunnel_pass')) continue;
+    let found;
+    try { found = fwdproxy.findForwardProxies(text); } catch { continue; }
+    for (const p of found) {
+      const ht = p.authFile ? readFileContent(st, p.authFile) : null;
+      out.push({
+        ...fwdproxy.publicProxy(p),
+        users: typeof ht === 'string' ? fwdproxy.parseHtpasswd(ht).map(u => u.username) : [],
+        confPath: name,
+        fileStatus: fileStatus(st, name),
+      });
+    }
+  }
+  return out;
+}
+
+function planForwardProxy(agent, body) {
+  const st = store.readState(agent.id);
+  const confPath = body.key ? cleanRemotePath(body.confPath) : forwardProxiesPath(agent);
+  if (!confPath) throw Object.assign(new Error('confPath required'), { status: 400 });
+  const before = readFileContent(st, confPath);
+  if (before === undefined) throw Object.assign(new Error('File not synced from the agent yet'), { status: 409 });
+  let existingHtpasswd = '';
+  if (body.key) {
+    const cur = fwdproxy.findForwardProxies(before || '').find(p => p.key === body.key);
+    if (cur && cur.authFile) existingHtpasswd = readFileContent(st, cur.authFile) || '';
+  }
+  // the listen port must not already be used by another (non-proxy) server on this host
+  const plan = fwdproxy.plan(before || '', {
+    key: body.key || null, fields: body.fields || {}, nginxDir: nginxDir(agent), existingHtpasswd,
+  });
+  return { ...plan, confPath, before: before || '', created: before === null };
+}
+
+app.get('/api/agents/:id/forward-proxies', requireAuth, (req, res) => {
+  const agent = requireAgent(req, res); if (!agent) return;
+  res.json({ ...forwardSupport(agent), file: forwardProxiesPath(agent), proxies: discoveredForwardProxies(agent) });
+});
+
+app.post('/api/agents/:id/forward-proxies/preview', requireAuth, (req, res) => {
+  const agent = requireAgent(req, res); if (!agent) return;
+  try {
+    const p = planForwardProxy(agent, req.body || {});
+    res.json({ path: p.confPath, created: p.created, diff: unifiedDiff(p.before, p.conf), users: p.users, authFile: p.htpasswd ? p.authFile : null });
+  } catch (err) { sendError(res, err); }
+});
+
+function saveForwardProxy(req, res) {
+  const agent = requireAgent(req, res); if (!agent) return;
+  if (!requireForwardSupport(agent, res)) return;
+  try {
+    const p = planForwardProxy(agent, req.body || {});
+    if (p.conf !== p.before) store.stageFile(agent.id, p.confPath, p.conf);
+    const st = store.readState(agent.id);
+    if (p.htpasswd) {
+      // the agent never reports auth_basic_user_file back — pin it so later applies keep it.
+      // 0640: the agent writes as root:nginx-agent and the nginx user is in nginx-agent
+      // (set up by the nginx-agent package), so workers can read it but other users can't.
+      store.stageFile(agent.id, p.authFile, p.htpasswd, '0640', { pin: true });
+    } else if (store.currentFile(st, p.authFile)) {
+      store.stageDelete(agent.id, p.authFile);
+    }
+    io.emit('files', { agentId: agent.id });
+    io.emit('agents');
+    res.json({ ok: true, key: p.key, path: p.confPath, created: p.created, users: p.users });
+  } catch (err) { sendError(res, err); }
+}
+app.post('/api/agents/:id/forward-proxies', requireAuth, saveForwardProxy);
+app.put('/api/agents/:id/forward-proxies', requireAuth, (req, res) => {
+  if (!req.body || !req.body.key) return res.status(400).json({ error: 'key required' });
+  saveForwardProxy(req, res);
+});
+
+app.delete('/api/agents/:id/forward-proxies', requireAuth, (req, res) => {
+  const agent = requireAgent(req, res); if (!agent) return;
+  const confPath = cleanRemotePath(req.query.path);
+  if (!confPath || !req.query.key) return res.status(400).json({ error: 'path and key required' });
+  const st = store.readState(agent.id);
+  const before = readFileContent(st, confPath);
+  if (typeof before !== 'string') return res.status(409).json({ error: 'File not synced from the agent yet' });
+  try {
+    const r = fwdproxy.remove(before, String(req.query.key));
+    if (r.conf.trim()) store.stageFile(agent.id, confPath, r.conf);
+    else store.stageDelete(agent.id, confPath);
+    if (r.authFile && store.currentFile(st, r.authFile)) store.stageDelete(agent.id, r.authFile);
+    else if (r.authFile) { const s2 = store.readState(agent.id); delete s2.draft[r.authFile]; store.writeState(agent.id, s2); }
+  } catch (err) { return sendError(res, err); }
   io.emit('files', { agentId: agent.id });
   io.emit('agents');
   res.json({ ok: true });
