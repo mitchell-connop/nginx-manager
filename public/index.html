@@ -1401,6 +1401,8 @@ function renderCerts() {
           key:  ${esc(c.remoteKeyPath || '(not set)')}
           ${m?.dnsNames?.length ? `<br>names: ${m.dnsNames.map(esc).join(', ')}` : ''}
           ${m?.issuer ? `<br>issuer: ${esc(m.issuer)}` : ''}
+          ${m?.notBefore ? `<br>issued:  ${esc(formatCertDate(m.notBefore))}` : ''}
+          ${m?.notAfter ? `<br>expires: ${certExpiryText(m.notAfter)}` : ''}
           ${c.usedBy.length ? `<br>used by: ${c.usedBy.map(esc).join(', ')}` : ''}
         </div>
         <div style="margin-top:6px;display:flex;gap:6px;flex-wrap:wrap">
@@ -1465,9 +1467,23 @@ function pushCert(certId) {
   doApply();
 }
 
+function formatCertDate(iso) {
+  return new Date(iso).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' });
+}
+
+function certDaysLeft(iso) { return Math.floor((new Date(iso) - Date.now()) / 86400000); }
+
+function certExpiryText(iso) {
+  const days = certDaysLeft(iso);
+  const color = days < 0 ? 'var(--danger)' : days < 21 ? 'var(--warn)' : 'var(--success)';
+  const rel = days < 0 ? `expired ${-days} day${days === -1 ? '' : 's'} ago`
+    : days === 0 ? 'expires today' : `${days} day${days === 1 ? '' : 's'} left`;
+  return `${esc(formatCertDate(iso))} <span style="color:${color}">(${rel})</span>`;
+}
+
 function certExpiryBadge(m) {
   if (!m?.notAfter) return '';
-  const days = Math.floor((new Date(m.notAfter) - Date.now()) / 86400000);
+  const days = certDaysLeft(m.notAfter);
   const cls = days < 0 ? 'badge-danger' : days < 21 ? 'badge-warn' : 'badge-success';
   return `<span class="badge ${cls}" title="Expires ${esc(formatDate(m.notAfter))}">${days < 0 ? 'Expired' : `${days}d left`}</span>`;
 }
