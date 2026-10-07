@@ -349,10 +349,12 @@
             <p id="panel-agent-host">hostname</p>
           </div>
           <div class="action-bar">
-            <button class="btn-success btn-sm" id="btn-sync"     onclick="doSync()">🔄 Sync</button>
-            <button class="btn-warn btn-sm"    id="btn-validate" onclick="doValidate()">✅ Validate</button>
-            <button class="btn-primary btn-sm" id="btn-reload"   onclick="doReload()">↩ Reload</button>
+            <button class="btn-primary btn-sm" id="btn-apply"    onclick="doApply()" title="Push pending changes: the agent writes them, runs nginx -t, reloads, and rolls back on failure">📤 Apply</button>
+            <button class="btn-warn btn-sm"    id="btn-discard"  onclick="doDiscard()">↶ Discard</button>
+            <button class="btn-success btn-sm" id="btn-sync"     onclick="doSync()" title="Re-upload config files from the agent">🔄 Sync</button>
             <button class="btn-secondary btn-sm" id="btn-status" onclick="doStatus()">📊 Status</button>
+            <button class="btn-secondary btn-sm" onclick="openSetup()">🔑 Agent Setup</button>
+            <button class="btn-secondary btn-sm" onclick="openEditAgent()">✏️ Edit</button>
             <button class="btn-danger btn-sm"  onclick="deleteCurrentAgent()">🗑 Remove</button>
           </div>
         </div>
@@ -404,7 +406,7 @@
                 <div style="display:flex;gap:8px">
                   <button class="btn-secondary btn-sm" onclick="closeEditor()">✕ Close</button>
                   <button class="btn-primary btn-sm"   onclick="saveConfig()">💾 Save</button>
-                  <button class="btn-success btn-sm"   id="btn-push-file" onclick="pushCurrentFile()">📤 Push to Server</button>
+                  <button class="btn-success btn-sm"   id="btn-push-file" onclick="pushCurrentFile()">📤 Save &amp; Apply</button>
                 </div>
               </div>
               <textarea class="code-editor" id="code-editor" spellcheck="false" placeholder="# nginx configuration..."></textarea>
@@ -436,7 +438,7 @@
           <div style="margin-top:16px">
             <div class="terminal-wrap">
               <div class="terminal-bar"><div class="t-dot t-green"></div><span class="terminal-title">Status Output</span></div>
-              <pre class="log-output" id="status-output">$ Click "Refresh Status" to check nginx...\n</pre>
+              <pre class="log-output" id="status-output">$ Click "Refresh Status" to ask the agent for nginx health...\n</pre>
             </div>
           </div>
         </div>
@@ -451,17 +453,11 @@
 <div class="modal-backdrop" id="agent-modal">
   <div class="modal">
     <h3 id="agent-modal-title">➕ Add Nginx Server</h3>
-    <div class="form-row">
-      <div class="form-group"><label>Name <span class="req">*</span></label><input type="text" id="f-name" placeholder="nginx-lb-01" /></div>
-      <div class="form-group"><label>Host / IP <span class="req">*</span></label><input type="text" id="f-host" placeholder="172.16.40.51" /></div>
-    </div>
-    <div class="form-row">
-      <div class="form-group"><label>SSH User <span class="req">*</span></label><input type="text" id="f-user" placeholder="root" /></div>
-      <div class="form-group"><label>SSH Port</label><input type="number" id="f-port" value="22" /></div>
-    </div>
-    <div class="form-group"><label>SSH Password</label><input type="password" id="f-pass" placeholder="password" /></div>
-    <div class="form-group"><label>SSH Key Path (on manager)</label><input type="text" id="f-key" placeholder="/root/.ssh/id_rsa (optional)" /></div>
-    <div class="form-group"><label>Nginx Config Path</label><input type="text" id="f-cfg" value="/etc/nginx" /></div>
+    <p style="font-size:.85rem;color:var(--text-dim);margin-bottom:16px" id="agent-modal-intro">
+      Servers are managed through <strong>NGINX Agent</strong> — no SSH or passwords. Saving creates a one-time
+      agent token and shows the commands to install and connect the agent on the server.
+    </p>
+    <div class="form-group"><label>Name <span class="req">*</span></label><input type="text" id="f-name" placeholder="nginx-lb-01" /></div>
     <div class="form-group">
       <label>Group</label>
       <input type="text" id="f-group" placeholder="e.g. Production, DMZ, Staging" list="group-datalist" autocomplete="off" />
@@ -472,6 +468,36 @@
     <div class="modal-actions">
       <button class="btn-secondary" onclick="closeAgentModal()">Cancel</button>
       <button class="btn-primary"   onclick="saveAgent()">💾 Save Server</button>
+    </div>
+  </div>
+</div>
+
+<!-- ─── AGENT SETUP MODAL ─── -->
+<div class="modal-backdrop" id="setup-modal">
+  <div class="modal modal-wide">
+    <h3>🔑 Connect NGINX Agent — <span id="setup-agent-name"></span></h3>
+    <div id="setup-token-wrap" style="display:none">
+      <div class="form-group">
+        <label>Agent token — shown once, copy it now</label>
+        <div style="display:flex;gap:8px">
+          <input type="text" id="setup-token" readonly class="mono" style="flex:1" />
+          <button class="btn-secondary btn-sm" onclick="copyText('setup-token')">📋 Copy</button>
+        </div>
+        <div class="form-hint">Only a hash is stored. Lost it? Use <strong>New Token</strong> below — the old one stops working.</div>
+      </div>
+    </div>
+    <div class="form-group">
+      <label>Run on the nginx server (as root)</label>
+      <textarea id="setup-script" class="code-editor" readonly style="min-height:300px;font-size:.78rem;border:1px solid var(--border);border-radius:var(--radius)"></textarea>
+      <div class="form-hint">
+        Agents connect in to this manager on gRPC/TLS port <strong id="setup-port"></strong> at <strong id="setup-host"></strong>
+        (set <code>AGENT_CONNECT_HOST</code> in .env to change). Certificates outside <code>allowed_directories</code> can't be managed.
+      </div>
+    </div>
+    <div class="modal-actions">
+      <button class="btn-warn" onclick="regenerateToken()">♻ New Token</button>
+      <button class="btn-secondary" onclick="copyText('setup-script')">📋 Copy Script</button>
+      <button class="btn-primary" onclick="document.getElementById('setup-modal').classList.remove('open')">Done</button>
     </div>
   </div>
 </div>
@@ -630,7 +656,7 @@
     </div>
 
     <div style="border-top:1px solid var(--border);padding-top:16px;margin-top:4px">
-      <div style="font-size:.82rem;color:var(--text-dim);margin-bottom:10px">Where should these files live on the nginx server?</div>
+      <div style="font-size:.82rem;color:var(--text-dim);margin-bottom:10px">Where should these files live on the nginx server? Paths must be inside the agent's <code>allowed_directories</code> (e.g. /etc/nginx/ssl). Files are staged — click <strong>Apply</strong> to push them.</div>
       <div class="form-row">
         <div class="form-group"><label>Remote Cert Path</label><input type="text" id="uc-remote-cert" placeholder="/etc/nginx/ssl/example.com.pem" /></div>
         <div class="form-group"><label>Remote Key Path</label><input type="text" id="uc-remote-key" placeholder="/etc/nginx/ssl/example.com.key" /></div>
@@ -666,7 +692,7 @@
 <div class="modal-backdrop" id="scan-modal">
   <div class="modal modal-wide">
     <h3>🔍 Certificate Scan Results</h3>
-    <p style="font-size:.85rem;color:var(--text-dim);margin-bottom:20px">Files found on the server. Click a suggestion to register it.</p>
+    <p style="font-size:.85rem;color:var(--text-dim);margin-bottom:20px">Certificate files reported by the agent (those referenced by nginx config). Click a suggestion to register it.</p>
     <div id="scan-results"></div>
     <div class="modal-actions">
       <button class="btn-secondary" onclick="document.getElementById('scan-modal').classList.remove('open')">Close</button>
@@ -678,7 +704,8 @@
 <div class="modal-backdrop" id="new-config-modal">
   <div class="modal">
     <h3>📄 New Config File</h3>
-    <div class="form-group"><label>Filename <span class="req">*</span></label><input type="text" id="f-new-cfg-name" placeholder="mysite.conf" /></div>
+    <div class="form-group"><label>Filename <span class="req">*</span></label><input type="text" id="f-new-cfg-name" placeholder="mysite.conf" />
+      <div class="form-hint">A bare name is created in <span class="mono" id="new-cfg-dir">conf.d</span>; or give an absolute path.</div></div>
     <div class="form-group">
       <label>Template</label>
       <select id="f-cfg-template">
@@ -703,9 +730,9 @@
 // ─── STATE ───────────────────────────────────────────
 const S = {
   agents: [], currentAgentId: null,
-  configs: [], certs: [], sites: [],
+  configs: [], certs: [], sites: [], confDir: '/etc/nginx/conf.d',
   currentFile: null,
-  socket: null, socketToken: 'authenticated',
+  socket: null,
   editingSiteId: null, editingCertId: null,
 };
 
@@ -723,7 +750,6 @@ const SITE_ICONS = { proxy: '🔀', static: '📁', redirect: '↩' };
 window.addEventListener('DOMContentLoaded', async () => {
   const me = await apiFetch('/api/me');
   if (me && me.authenticated) showApp();
-  initSocket();
   // Tab click delegation
   document.querySelectorAll('.tab-btn').forEach(btn => {
     btn.addEventListener('click', () => switchTab(btn.dataset.tab));
@@ -732,13 +758,21 @@ window.addEventListener('DOMContentLoaded', async () => {
 
 // ─── SOCKET ───────────────────────────────────────────
 function initSocket() {
+  if (S.socket) return;
   S.socket = io();
-  S.socket.on('log', data => appendLog(data));
+  S.socket.on('connect_error', () => {});
+  S.socket.on('log', ({ agentId, text }) => { if (agentId === S.currentAgentId) appendLog(text); });
   S.socket.on('done', data => {
-    if (data.success) toast('✅ Operation completed', 'success');
-    else              toast('❌ Operation failed — see log', 'error');
+    if (data.agentId !== S.currentAgentId) return;
+    if (data.op === 'status') return;
+    if (data.success) toast(`✅ ${data.op === 'apply' ? 'Applied' : 'Done'}${data.output ? ' — ' + data.output : ''}`, 'success');
+    else              toast(`❌ ${data.output || 'Operation failed'} — see log`, 'error');
     enableButtons();
   });
+  S.socket.on('agents', debounce(loadAgents, 300));
+  S.socket.on('files', debounce(({ agentId } = {}) => {
+    if (agentId === S.currentAgentId) { loadConfigs(); loadCerts(); }
+  }, 300));
 }
 
 // ─── AUTH ─────────────────────────────────────────────
@@ -748,7 +782,7 @@ async function doLogin() {
   errEl.textContent = '';
   const r = await fetch('/api/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ password: pass }) });
   if (r.ok) showApp();
-  else errEl.textContent = '✗ Incorrect password';
+  else errEl.textContent = r.status === 429 ? '✗ Too many attempts — try again later' : '✗ Incorrect password';
 }
 
 async function doLogout() {
@@ -759,6 +793,7 @@ async function doLogout() {
 function showApp() {
   document.getElementById('login-screen').style.display = 'none';
   document.getElementById('app').style.display = 'flex';
+  initSocket();
   loadAgents();
 }
 
@@ -771,7 +806,9 @@ async function apiFetch(url, opts = {}) {
       body: opts.body && typeof opts.body !== 'string' ? JSON.stringify(opts.body) : opts.body,
     });
     if (r.status === 401) { location.reload(); return null; }
-    return await r.json();
+    const data = await r.json();
+    if (!r.ok && data && typeof data === 'object') data._status = r.status;
+    return data;
   } catch { return null; }
 }
 
@@ -787,6 +824,7 @@ async function apiUpload(url, formData) {
 async function loadAgents() {
   S.agents = await apiFetch('/api/agents') || [];
   renderAgentList();
+  if (S.currentAgentId) renderAgentHeader();
   const lbl = document.getElementById('agent-count-label');
   lbl.textContent = S.agents.length === 0 ? 'No servers' : `${S.agents.length} server${S.agents.length !== 1 ? 's' : ''}`;
 }
@@ -831,10 +869,10 @@ function renderAgentList() {
 
     const agentItems = agents.map(a => `
       <div class="agent-item ${a.id === S.currentAgentId ? 'active' : ''}" onclick="selectAgent('${a.id}')">
-        <div class="agent-dot" id="dot-${a.id}"></div>
+        <div class="agent-dot ${a.online ? 'online' : (a.lastSeen ? 'offline' : '')}" id="dot-${a.id}" title="${a.online ? 'Agent connected' : a.lastSeen ? 'Agent disconnected' : 'Waiting for agent'}"></div>
         <div class="agent-item-info">
-          <div class="agent-item-name">${esc(a.name)}</div>
-          <div class="agent-item-host">${esc(a.host)}</div>
+          <div class="agent-item-name">${esc(a.name)}${a.pendingChanges ? ` <span class="badge badge-warn" title="Unapplied changes">${a.pendingChanges}</span>` : ''}</div>
+          <div class="agent-item-host">${esc(a.hostname || (a.lastSeen ? 'agent offline' : 'awaiting agent'))}</div>
         </div>
       </div>`).join('');
 
@@ -867,18 +905,33 @@ async function selectAgent(id) {
   if (!agent) return;
   document.getElementById('welcome').style.display = 'none';
   document.getElementById('agent-panel').classList.add('visible');
-  document.getElementById('panel-agent-name').textContent = agent.name;
-  document.getElementById('panel-agent-host').textContent = `${agent.sshUser}@${agent.host}:${agent.sshPort || 22}  •  ${agent.nginxConfigPath}`;
-  document.getElementById('stat-host').textContent = agent.host;
+  renderAgentHeader();
   document.getElementById('editor-section').style.display = 'none';
+  clearLog();
   switchTab('builder');
   await Promise.all([loadSites(), loadCerts(), loadConfigs()]);
 }
 
+function currentAgent() { return S.agents.find(a => a.id === S.currentAgentId); }
+
+function renderAgentHeader() {
+  const a = currentAgent();
+  if (!a) return;
+  document.getElementById('panel-agent-name').textContent = a.name;
+  const conn = a.online ? '🟢 agent connected' : a.lastSeen ? `🔴 agent offline (last seen ${formatDate(a.lastSeen)})` : '⚪ waiting for agent — see Agent Setup';
+  const bits = [a.hostname, a.nginxVersion && `nginx ${a.nginxVersion}`, a.configPath, conn].filter(Boolean);
+  document.getElementById('panel-agent-host').textContent = bits.join('  •  ');
+  document.getElementById('stat-host').textContent = a.hostname || '—';
+  const n = a.pendingChanges || 0;
+  const applyBtn = document.getElementById('btn-apply');
+  applyBtn.textContent = n ? `📤 Apply (${n})` : '📤 Apply';
+  document.getElementById('btn-discard').style.display = n ? '' : 'none';
+}
+
 async function deleteCurrentAgent() {
   if (!S.currentAgentId) return;
-  const a = S.agents.find(a => a.id === S.currentAgentId);
-  if (!confirm(`Remove ${a.name}?`)) return;
+  const a = currentAgent();
+  if (!confirm(`Remove ${a.name}? Its agent token stops working; nginx on the server is left as-is.`)) return;
   await apiFetch(`/api/agents/${S.currentAgentId}`, { method: 'DELETE' });
   S.currentAgentId = null;
   document.getElementById('agent-panel').classList.remove('visible');
@@ -892,10 +945,20 @@ let _editAgentId = null;
 function openAddAgent(presetGroup = '') {
   _editAgentId = null;
   document.getElementById('agent-modal-title').textContent = '➕ Add Nginx Server';
-  ['name','host','user','pass','key','desc'].forEach(f => { const el = document.getElementById('f-'+f); if (el) el.value = ''; });
-  document.getElementById('f-port').value  = '22';
-  document.getElementById('f-cfg').value   = '/etc/nginx';
+  document.getElementById('agent-modal-intro').style.display = '';
+  ['name','desc'].forEach(f => { document.getElementById('f-'+f).value = ''; });
   document.getElementById('f-group').value = presetGroup;
+  updateGroupDatalist();
+  document.getElementById('agent-modal').classList.add('open');
+}
+function openEditAgent() {
+  const a = currentAgent(); if (!a) return;
+  _editAgentId = a.id;
+  document.getElementById('agent-modal-title').textContent = '✏️ Edit Server';
+  document.getElementById('agent-modal-intro').style.display = 'none';
+  document.getElementById('f-name').value  = a.name || '';
+  document.getElementById('f-desc').value  = a.description || '';
+  document.getElementById('f-group').value = a.group || '';
   updateGroupDatalist();
   document.getElementById('agent-modal').classList.add('open');
 }
@@ -903,22 +966,47 @@ function closeAgentModal() { document.getElementById('agent-modal').classList.re
 async function saveAgent() {
   const data = {
     name: document.getElementById('f-name').value.trim(),
-    host: document.getElementById('f-host').value.trim(),
-    sshUser: document.getElementById('f-user').value.trim(),
-    sshPort: parseInt(document.getElementById('f-port').value) || 22,
-    sshPass: document.getElementById('f-pass').value,
-    sshKeyPath: document.getElementById('f-key').value.trim(),
-    nginxConfigPath: document.getElementById('f-cfg').value.trim() || '/etc/nginx',
     group: document.getElementById('f-group').value.trim(),
     description: document.getElementById('f-desc').value.trim(),
   };
-  if (!data.name || !data.host || !data.sshUser) { toast('Name, host, SSH user required', 'error'); return; }
+  if (!data.name) { toast('Name is required', 'error'); return; }
   const res = _editAgentId
     ? await apiFetch(`/api/agents/${_editAgentId}`, { method: 'PUT', body: data })
     : await apiFetch('/api/agents', { method: 'POST', body: data });
+  if (!res?.id) { toast(`Error: ${res?.error || 'save failed'}`, 'error'); return; }
   closeAgentModal();
   await loadAgents();
-  if (res?.id) { toast(`${_editAgentId ? 'Updated' : 'Added'} ${res.name}`, 'success'); selectAgent(res.id); }
+  toast(`${_editAgentId ? 'Updated' : 'Added'} ${res.name}`, 'success');
+  await selectAgent(res.id);
+  if (res.token) showSetup(res.name, res.setup, res.token);
+}
+
+// ── Agent setup / tokens ──────────────────────────────
+function showSetup(name, setup, token) {
+  document.getElementById('setup-agent-name').textContent = name;
+  document.getElementById('setup-token-wrap').style.display = token ? '' : 'none';
+  document.getElementById('setup-token').value = token || '';
+  document.getElementById('setup-script').value = setup.script;
+  document.getElementById('setup-host').textContent = setup.host;
+  document.getElementById('setup-port').textContent = setup.port;
+  document.getElementById('setup-modal').classList.add('open');
+}
+async function openSetup() {
+  const a = currentAgent(); if (!a) return;
+  const setup = await apiFetch(`/api/agents/${a.id}/setup`);
+  if (setup) showSetup(a.name, setup, null);
+}
+async function regenerateToken() {
+  const a = currentAgent(); if (!a) return;
+  if (!confirm(`Issue a new token for ${a.name}? The current token stops working immediately and the agent disconnects until you update /etc/nginx-agent/manager.token on the server.`)) return;
+  const res = await apiFetch(`/api/agents/${a.id}/token`, { method: 'POST' });
+  if (res?.token) showSetup(a.name, res.setup, res.token);
+}
+function copyText(id) {
+  const el = document.getElementById(id);
+  navigator.clipboard.writeText(el.value).then(
+    () => toast('Copied', 'success'),
+    () => { el.select(); toast('Press Ctrl+C to copy', 'info'); });
 }
 
 // ─── GROUPS ───────────────────────────────────────────
@@ -1083,6 +1171,7 @@ function renderSites() {
       </div>
       <div class="site-card-badges">
         <span class="badge badge-info">${s.type}</span>
+        ${S.configs.find(c => c.name === s.confPath && c.status !== 'live') ? `<span class="badge badge-warn">● unapplied</span>` : ''}
         ${s.ssl ? `<span class="badge badge-success">🔒 SSL</span>` : `<span class="badge badge-warn">⚠ HTTP</span>`}
         ${s.ssl && s.certId ? `<span class="badge badge-purple">🔐 Cert Bound</span>` : ''}
         ${s.upstream && s.upstream.length > 1 ? `<span class="badge badge-accent">${s.upstream.length} upstreams</span>` : ''}
@@ -1090,7 +1179,7 @@ function renderSites() {
       </div>
       ${s.upstream && s.upstream.length ? `<div style="font-size:.75rem;color:var(--text-dim);font-family:var(--mono)">${s.upstream.slice(0,2).map(esc).join(', ')}${s.upstream.length > 2 ? ` +${s.upstream.length-2} more` : ''}</div>` : ''}
       <div class="site-card-actions">
-        <button class="btn-primary btn-sm" onclick="pushSite('${s.id}')">📤 Push</button>
+        <button class="btn-primary btn-sm" onclick="pushSite('${s.id}')" title="Apply all pending changes">📤 Apply</button>
         <button class="btn-secondary btn-sm" onclick="editSite('${s.id}')">✏️ Edit</button>
         <button class="btn-danger btn-sm" onclick="deleteSite('${s.id}')">🗑</button>
       </div>
@@ -1234,7 +1323,7 @@ async function previewConf() {
   const site = buildSiteObj();
   if (!site.name) { document.getElementById('conf-preview').textContent = '# Fill in the form above...'; return; }
   const res = await apiFetch(`/api/agents/${S.currentAgentId}/sites/preview`, { method: 'POST', body: site });
-  document.getElementById('conf-preview').textContent = res?.conf || '# Preview error';
+  document.getElementById('conf-preview').textContent = res?.conf ? `# → ${res.path}\n${res.conf}` : '# Preview error';
 }
 
 async function saveSite() {
@@ -1247,7 +1336,7 @@ async function saveSite() {
     res = await apiFetch(`/api/agents/${S.currentAgentId}/sites`, { method: 'POST', body: site });
   }
   if (res?.id) {
-    toast(`Site "${res.name}" saved`, 'success');
+    toast(`Site "${res.name}" saved — click Apply to push it`, 'success');
     closeSiteModal();
     await loadSites();
     await loadConfigs();
@@ -1263,8 +1352,11 @@ async function editSite(siteId) {
 
 async function deleteSite(siteId) {
   const s = S.sites.find(s => s.id === siteId);
-  if (!confirm(`Delete site "${s?.name}"? This will also remove the generated config file.`)) return;
-  await apiFetch(`/api/agents/${S.currentAgentId}/sites/${siteId}`, { method: 'DELETE' });
+  const removeFile = s?.importedFrom
+    ? confirm(`Also delete ${s.confPath} from the server on the next Apply? (Cancel keeps the file and just forgets the site.)`)
+    : true;
+  if (!s?.importedFrom && !confirm(`Delete site "${s?.name}"? Its config file is removed from the server on the next Apply.`)) return;
+  await apiFetch(`/api/agents/${S.currentAgentId}/sites/${siteId}?removeFile=${removeFile}`, { method: 'DELETE' });
   toast('Site deleted', 'info');
   await loadSites();
   await loadConfigs();
@@ -1274,7 +1366,7 @@ async function importSitesFromServer() {
   const btn = document.getElementById('btn-import-sites');
   if (btn) { btn.disabled = true; btn.textContent = '⏳ Importing...'; }
 
-  toast('⬇ Reading /etc/nginx/conf.d from server...', 'info');
+  toast(`⬇ Reading ${S.confDir} as reported by the agent...`, 'info');
   const res = await apiFetch(`/api/agents/${S.currentAgentId}/sites/import`, { method: 'POST' });
 
   if (btn) { btn.disabled = false; btn.textContent = '⬇ Import from Server'; }
@@ -1309,14 +1401,8 @@ async function importSitesFromServer() {
   }
 }
 
-async function pushSite(siteId) {
-  const s = S.sites.find(s => s.id === siteId);
-  if (!s) return;
-  const fname = `site_${s.name.replace(/[^a-zA-Z0-9_-]/g,'_')}.conf`;
-  switchTab('terminal');
-  clearLog();
-  disableButtons();
-  S.socket.emit('push', { agentId: S.currentAgentId, filename: fname, token: S.socketToken });
+function pushSite(siteId) {
+  doApply();
 }
 
 // ─── CERTIFICATES ─────────────────────────────────────
@@ -1334,9 +1420,9 @@ function renderCerts() {
       <div class="icon">🔐</div>
       <p>No certificates yet.</p>
       <p style="font-size:.82rem;margin-top:6px">
-        <strong>Scan Server</strong> to find existing certs,
+        <strong>Scan Server</strong> to pick up certs the agent reported,
         <strong>Register Remote</strong> for certs already on the server,
-        or <strong>Upload Cert</strong> to push new files.
+        or <strong>Upload Cert</strong> to stage new files.
       </p>
     </div>`;
     return;
@@ -1351,14 +1437,13 @@ function renderCerts() {
           key:  ${esc(c.remoteKeyPath  || '(not set)')}
         </div>
         <div style="margin-top:6px;display:flex;gap:6px;flex-wrap:wrap">
-          ${c.remoteOnly ? `<span class="badge badge-info">Remote Only</span>` : `<span class="badge badge-success">Files Uploaded</span>`}
-          ${c.localCert  ? `<span class="badge badge-accent">📄 Cert</span>` : ''}
-          ${c.localKey   ? `<span class="badge badge-accent">🔑 Key</span>`  : ''}
-          ${c.localChain ? `<span class="badge badge-accent">🔗 Chain</span>` : ''}
+          ${c.pending ? `<span class="badge badge-warn">● Staged — Apply to push</span>` : c.onServer ? `<span class="badge badge-success">On server</span>` : `<span class="badge badge-info">Not reported by agent</span>`}
+          ${c.certificateMeta?.subject ? `<span class="badge badge-accent">CN ${esc(c.certificateMeta.subject)}</span>` : ''}
+          ${certExpiryBadge(c.certificateMeta)}
         </div>
       </div>
       <div class="cert-actions">
-        ${!c.remoteOnly && c.localCert ? `<button class="btn-purple btn-sm" onclick="pushCert('${c.id}')">📤 Push to Server</button>` : ''}
+        ${c.pending ? `<button class="btn-purple btn-sm" onclick="pushCert('${c.id}')">📤 Apply</button>` : ''}
         <button class="btn-danger btn-sm" onclick="deleteCert('${c.id}')">🗑</button>
       </div>
     </div>`).join('');
@@ -1400,7 +1485,7 @@ async function uploadCert() {
 
   const res = await apiUpload(`/api/agents/${S.currentAgentId}/certs`, fd);
   if (res?.id) {
-    toast(`Certificate "${label}" uploaded`, 'success');
+    toast(`Certificate "${label}" staged — click Apply to push it`, 'success');
     closeUploadCertModal();
     await loadCerts();
   } else {
@@ -1431,7 +1516,7 @@ async function saveRemoteCert() {
 }
 
 async function scanCerts() {
-  toast('🔍 Scanning /etc/ssl/nginx and /etc/letsencrypt...', 'info');
+  toast('🔍 Checking certificate files reported by the agent...', 'info');
   const res = await apiFetch(`/api/agents/${S.currentAgentId}/certs/scan`, { method: 'POST' });
   if (!res) { toast('Scan failed', 'error'); return; }
 
@@ -1448,7 +1533,7 @@ async function scanCerts() {
   }
 
   if (!res.files || !res.files.length) {
-    results.innerHTML = `<p style="color:var(--text-dim);padding:16px">No certificate files found in /etc/ssl/nginx or /etc/letsencrypt.</p>`;
+    results.innerHTML = `<p style="color:var(--text-dim);padding:16px">The agent hasn't reported any certificate files. It only reports files nginx config references inside its allowed_directories.</p>`;
   } else {
     const autoIds = new Set((res.autoRegistered || []).map(c => c.remoteCertPath));
 
@@ -1501,49 +1586,65 @@ async function quickRegister(dir, certPath, keyPath) {
 }
 
 function pushCert(certId) {
-  switchTab('terminal');
-  clearLog();
-  disableButtons();
-  S.socket.emit('pushCert', { agentId: S.currentAgentId, certId, token: S.socketToken });
+  doApply();
+}
+
+function certExpiryBadge(m) {
+  if (!m?.notAfter) return '';
+  const days = Math.floor((new Date(m.notAfter) - Date.now()) / 86400000);
+  const cls = days < 0 ? 'badge-danger' : days < 21 ? 'badge-warn' : 'badge-success';
+  return `<span class="badge ${cls}" title="Expires ${esc(formatDate(m.notAfter))}">${days < 0 ? 'Expired' : `${days}d left`}</span>`;
 }
 
 async function deleteCert(certId) {
   const c = S.certs.find(c => c.id === certId);
-  if (!confirm(`Delete certificate "${c?.label}"?`)) return;
+  if (!confirm(`Forget certificate "${c?.label}"? Files on the server are not touched.`)) return;
   await apiFetch(`/api/agents/${S.currentAgentId}/certs/${certId}`, { method: 'DELETE' });
   toast('Certificate deleted', 'info');
   await loadCerts();
 }
 
 // ─── RAW CONFIGS ──────────────────────────────────────
+const FILE_STATUS_BADGE = {
+  added:    '<span class="badge badge-success">+ new</span>',
+  modified: '<span class="badge badge-warn">● modified</span>',
+  deleted:  '<span class="badge badge-danger">− delete</span>',
+  live:     '',
+};
+
 async function loadConfigs() {
   if (!S.currentAgentId) return;
-  S.configs = await apiFetch(`/api/agents/${S.currentAgentId}/configs`) || [];
+  const res = await apiFetch(`/api/agents/${S.currentAgentId}/files`);
+  S.configs = res?.files || [];
+  S.confDir = res?.confDir || S.confDir;
   renderConfigList();
+  if (S.sites.length) renderSites();
 }
 
 function renderConfigList() {
   const list = document.getElementById('config-list');
   if (!S.configs.length) {
-    list.innerHTML = `<div class="empty-state"><div class="icon">📂</div><p>No config files yet.<br>Use <strong>Sync</strong> to pull from server, or <strong>Visual Builder</strong> to create sites.</p></div>`;
+    list.innerHTML = `<div class="empty-state"><div class="icon">📂</div><p>No config files yet.<br>They appear once the agent connects and reports nginx's config — see <strong>🔑 Agent Setup</strong>.</p></div>`;
     return;
   }
   list.innerHTML = S.configs.map(c => `
-    <div class="card-item ${c.name === S.currentFile ? 'selected' : ''}" onclick="openConfig('${esc(c.name)}')">
+    <div class="card-item ${c.name === S.currentFile ? 'selected' : ''}" ${c.status === 'deleted' ? '' : `onclick="openConfig('${esc(c.name)}')"`} style="${c.status === 'deleted' ? 'opacity:.6' : 'cursor:pointer'}">
       <div>
-        <div class="card-item-name">📄 ${esc(c.name)}</div>
-        <div class="card-item-meta">${formatBytes(c.size)} • ${formatDate(c.modified)}</div>
+        <div class="card-item-name">${c.isCert ? '🔐' : '📄'} ${esc(c.name)} ${FILE_STATUS_BADGE[c.status] || ''}</div>
+        <div class="card-item-meta">${formatBytes(c.size)}${c.modified ? ' • ' + formatDate(c.modified) : ''}${c.synced ? '' : ' • <span style="color:var(--warn)">contents not synced</span>'}</div>
       </div>
       <div class="card-item-actions">
-        <button class="btn-primary btn-xs"  onclick="event.stopPropagation();pushFile('${esc(c.name)}')">📤 Push</button>
-        <button class="btn-danger btn-xs"   onclick="event.stopPropagation();deleteConfig('${esc(c.name)}')">🗑</button>
+        ${c.status !== 'live' ? `<button class="btn-secondary btn-xs" onclick="event.stopPropagation();discardFile('${esc(c.name)}')" title="Discard this change">↶</button>` : ''}
+        ${c.status !== 'deleted' ? `<button class="btn-danger btn-xs" onclick="event.stopPropagation();deleteConfig('${esc(c.name)}')">🗑</button>` : ''}
       </div>
     </div>`).join('');
 }
 
+const fileUrl = name => `/api/agents/${S.currentAgentId}/file?path=${encodeURIComponent(name)}`;
+
 async function openConfig(filename) {
-  const data = await apiFetch(`/api/agents/${S.currentAgentId}/configs/${encodeURIComponent(filename)}`);
-  if (!data) return;
+  const data = await apiFetch(fileUrl(filename));
+  if (!data || data.error) { toast(data?.error || 'Could not open file', 'error'); return; }
   S.currentFile = filename;
   document.getElementById('editor-filename').textContent = filename;
   document.getElementById('code-editor').value = data.content;
@@ -1559,88 +1660,104 @@ function closeEditor() {
 
 async function saveConfig() {
   if (!S.currentFile) return;
-  await apiFetch(`/api/agents/${S.currentAgentId}/configs/${encodeURIComponent(S.currentFile)}`, {
+  const res = await apiFetch(fileUrl(S.currentFile), {
     method: 'PUT', body: { content: document.getElementById('code-editor').value },
   });
-  await loadConfigs();
-  toast(`Saved ${S.currentFile}`, 'success');
+  if (!res?.ok) { toast(`Save failed: ${res?.error || 'unknown error'}`, 'error'); return false; }
+  await Promise.all([loadConfigs(), loadAgents()]);
+  toast(res.status === 'live' ? `${S.currentFile} matches the server — nothing to apply` : `Saved ${S.currentFile} — click Apply to push`, 'success');
+  return true;
 }
 
 async function deleteConfig(filename) {
-  if (!confirm(`Delete ${filename}?`)) return;
-  await apiFetch(`/api/agents/${S.currentAgentId}/configs/${encodeURIComponent(filename)}`, { method: 'DELETE' });
+  if (!confirm(`Delete ${filename} from the server on the next Apply?`)) return;
+  await apiFetch(fileUrl(filename), { method: 'DELETE' });
   if (S.currentFile === filename) closeEditor();
-  await loadConfigs();
-  toast(`Deleted ${filename}`, 'info');
+  await Promise.all([loadConfigs(), loadAgents()]);
+  toast(`${filename} marked for deletion — click Apply to push`, 'info');
+}
+
+async function discardFile(filename) {
+  await apiFetch(`/api/agents/${S.currentAgentId}/discard`, { method: 'POST', body: { path: filename } });
+  if (S.currentFile === filename) closeEditor();
+  await Promise.all([loadConfigs(), loadAgents()]);
 }
 
 function openNewConfig() {
   document.getElementById('f-new-cfg-name').value = '';
+  document.getElementById('new-cfg-dir').textContent = S.confDir;
   document.getElementById('new-config-modal').classList.add('open');
 }
 function closeNewConfigModal() { document.getElementById('new-config-modal').classList.remove('open'); }
 async function createNewConfig() {
   let name = document.getElementById('f-new-cfg-name').value.trim();
   if (!name) { toast('Filename required', 'error'); return; }
-  if (!name.endsWith('.conf') && !name.endsWith('.nginx')) name += '.conf';
+  if (!name.startsWith('/')) {
+    if (name.includes('/')) { toast('Use a bare filename or an absolute path', 'error'); return; }
+    if (!name.endsWith('.conf')) name += '.conf';
+    name = `${S.confDir}/${name}`;
+  }
+  if (S.configs.some(c => c.name === name && c.status !== 'deleted')) { toast(`${name} already exists`, 'error'); return; }
   const content = CONF_TEMPLATES[document.getElementById('f-cfg-template').value] || '';
-  await apiFetch(`/api/agents/${S.currentAgentId}/configs/${encodeURIComponent(name)}`, { method: 'PUT', body: { content } });
+  const res = await apiFetch(fileUrl(name), { method: 'PUT', body: { content } });
+  if (!res?.ok) { toast(`Error: ${res?.error || 'could not create file'}`, 'error'); return; }
   closeNewConfigModal();
-  await loadConfigs();
+  await Promise.all([loadConfigs(), loadAgents()]);
   openConfig(name);
   switchTab('configs');
-  toast(`Created ${name}`, 'success');
+  toast(`Created ${name} — click Apply to push`, 'success');
 }
 
-// ─── SSH OPS ──────────────────────────────────────────
+// ─── AGENT OPS ────────────────────────────────────────
+const OP_BUTTONS = ['btn-apply','btn-discard','btn-sync','btn-status','btn-push-file'];
 function disableButtons() {
-  ['btn-sync','btn-validate','btn-reload','btn-status','btn-push-file'].forEach(id => {
-    const b = document.getElementById(id); if (b) b.disabled = true;
-  });
+  OP_BUTTONS.forEach(id => { const b = document.getElementById(id); if (b) b.disabled = true; });
 }
 function enableButtons() {
-  ['btn-sync','btn-validate','btn-reload','btn-status','btn-push-file'].forEach(id => {
-    const b = document.getElementById(id); if (b) b.disabled = false;
-  });
+  OP_BUTTONS.forEach(id => { const b = document.getElementById(id); if (b) b.disabled = false; });
 }
 
+function doApply() {
+  if (!S.currentAgentId) return;
+  const a = currentAgent();
+  if (!a?.pendingChanges && !confirm('No pending changes. Re-apply the current config anyway?')) return;
+  switchTab('terminal'); clearLog(); disableButtons();
+  S.socket.emit('apply', { agentId: S.currentAgentId });
+}
+async function doDiscard() {
+  if (!S.currentAgentId) return;
+  if (!confirm('Discard all unapplied changes for this server?')) return;
+  await apiFetch(`/api/agents/${S.currentAgentId}/discard`, { method: 'POST', body: {} });
+  closeEditor();
+  await Promise.all([loadConfigs(), loadAgents(), loadCerts()]);
+  toast('Pending changes discarded', 'info');
+}
 function doSync() {
   if (!S.currentAgentId) return;
   switchTab('terminal'); clearLog(); disableButtons();
-  S.socket.emit('sync', { agentId: S.currentAgentId, token: S.socketToken });
-  S.socket.once('done', async () => { await loadConfigs(); });
-}
-function doValidate() {
-  if (!S.currentAgentId) return;
-  switchTab('terminal'); clearLog(); disableButtons();
-  S.socket.emit('validate', { agentId: S.currentAgentId, token: S.socketToken });
-}
-function doReload() {
-  if (!S.currentAgentId) return;
-  switchTab('terminal'); clearLog(); disableButtons();
-  S.socket.emit('reload', { agentId: S.currentAgentId, token: S.socketToken });
+  S.socket.emit('sync', { agentId: S.currentAgentId });
 }
 function doStatus() {
   if (!S.currentAgentId) return;
   switchTab('status');
-  document.getElementById('status-output').textContent = '$ Checking nginx status...\n';
+  document.getElementById('status-output').textContent = '$ Asking the agent for nginx health...\n';
   disableButtons();
-  S.socket.emit('status', { agentId: S.currentAgentId, token: S.socketToken });
-  S.socket.once('done', data => {
+  const agentId = S.currentAgentId;
+  const handler = data => {
+    if (data.op !== 'status' || data.agentId !== agentId) return;
+    S.socket.off('done', handler);
+    enableButtons();
     document.getElementById('status-output').textContent = data.output || '';
-    const active = data.output?.includes('active');
-    document.getElementById('stat-status').textContent  = active ? '🟢 Active' : '🔴 Inactive';
-    document.getElementById('stat-status').style.color  = active ? 'var(--success)' : 'var(--danger)';
-  });
-}
-function pushFile(filename) {
-  switchTab('terminal'); clearLog(); disableButtons();
-  S.socket.emit('push', { agentId: S.currentAgentId, filename, token: S.socketToken });
+    const el = document.getElementById('stat-status');
+    el.textContent = data.healthy ? '🟢 Healthy' : data.output === 'Agent is not connected' ? '🔴 Agent offline' : '🟠 Unhealthy';
+    el.style.color = data.healthy ? 'var(--success)' : 'var(--danger)';
+  };
+  S.socket.on('done', handler);
+  S.socket.emit('status', { agentId });
 }
 async function pushCurrentFile() {
   if (!S.currentFile) return;
-  await saveConfig();
-  pushFile(S.currentFile);
+  if (await saveConfig() !== false) doApply();
 }
 
 // ─── TABS ─────────────────────────────────────────────
@@ -1666,6 +1783,7 @@ function esc(s) {
   return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');
 }
 function formatBytes(b) { return b < 1024 ? b + ' B' : (b/1024).toFixed(1) + ' KB'; }
+function debounce(fn, ms) { let t; return (...args) => { clearTimeout(t); t = setTimeout(() => fn(...args), ms); }; }
 function formatDate(iso) { return new Date(iso).toLocaleString(); }
 </script>
 </body>

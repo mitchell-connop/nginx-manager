@@ -1,0 +1,337 @@
+// Copyright (c) F5, Inc.
+//
+// This source code is licensed under the Apache License, Version 2.0 license found in the
+// LICENSE file in the root directory of this source tree.
+
+syntax = "proto3";
+package mpi.v1;
+
+option go_package = "mpi/v1";
+
+import "mpi/v1/common.proto";
+import "google/protobuf/timestamp.proto";
+
+// This specifies the FileService operations for transferring file data between a client and server.
+// All operations are written from a client perspective and flow Client -> Server
+// The server must set a max file size (in bytes), and that size must be used to configure 
+// the gRPC server and client for the FileService such that the FileContents object can be sent with bytes of the configured size. 
+// The actual configured max size for gRPC objects must be maxFileSize + sizeOfSha256HashString since a FileContents object contains both. 
+// A SHA256 hash string is 64 bytes, therefore the configured max message size should be maxFileSize + 64.
+service FileService {
+    // Get the overview of files for a particular configuration version of an instance
+    rpc GetOverview(GetOverviewRequest) returns (GetOverviewResponse) {}
+    // Update the overview of files for a particular set of file changes on the data plane
+    rpc UpdateOverview(UpdateOverviewRequest) returns (UpdateOverviewResponse) {}
+    // Get the file contents for a particular file
+    rpc GetFile(GetFileRequest) returns (GetFileResponse) {}
+    // Update a file from the Agent to the Server
+    rpc UpdateFile(UpdateFileRequest) returns (UpdateFileResponse) {}
+
+    // GetFileStream requests the file content in chunks. MP and agent should agree on size to use stream
+    // vs non-stream. For smaller files, it may be more efficient to not-stream.
+    rpc GetFileStream(GetFileRequest) returns (stream FileDataChunk) {}
+
+    // UpdateFileStream uploads the file content in streams. MP and agent should agree on size to use stream
+    // vs non-stream. For smaller files, it may be more efficient to not-stream.
+    rpc UpdateFileStream(stream FileDataChunk) returns (UpdateFileResponse) {}
+}
+
+// Represents a data chunk for streaming file transfer.
+// For any Stream file transfer, following assumptions should be asserted (by implementation):
+// - invalid to contain more or less than one FileDataChunkHeaders
+// - invalid to have FileDataChunkContents before FileDataChunkHeaders
+// - invalid to have more/fewer FileDataChunkContents than FileDataChunkHeader.chunks
+// - invalid to have two FileDataChunkContents with same chunk_id
+// - invalid to have FileDataChunkContent with zero-length data
+// - invalid to have FileDataChunk message without either header or content
+// - hash of the combined contents should match FileDataChunkHeader.file_meta.hash
+// - total size of the combined contents should match FileDataChunkHeader.file_meta.size
+// - chunk_size should be less than the gRPC max message size
+message FileDataChunk {
+    // meta regarding the transfer request
+    mpi.v1.MessageMeta meta = 1;
+    oneof chunk {
+        // Chunk header
+        FileDataChunkHeader header = 2;
+        // Chunk data
+        FileDataChunkContent content = 3;
+    }
+}
+
+// Represents a chunked resource Header
+message FileDataChunkHeader {
+    // meta regarding the file, help identity the file name, size, hash, perm
+    // receiver should validate the hash against the combined contents
+    FileMeta file_meta = 1;
+    // total number of chunks expected in the transfer
+    uint32 chunks = 2;
+    // max size of individual chunks, can be undersized if EOF
+    uint32 chunk_size = 3;
+}
+
+// Represents a chunked resource chunk
+message FileDataChunkContent {
+    // chunk id, i.e. x of y, zero-indexed
+    uint32 chunk_id = 1;
+    // chunk data, should be at most chunk_size
+    bytes data = 2;
+}
+
+// Represents a request payload for a file overview
+message GetOverviewRequest {
+    // Meta-information associated with a message
+    mpi.v1.MessageMeta message_meta = 1;
+    // The config version of the overview you are requesting
+    ConfigVersion config_version = 2;
+}
+
+// Represents the response payload to a GetOverviewRequest, requesting a list of logically grouped files e.g. configuration payload
+message GetOverviewResponse {
+    // The file overview of an instance
+    FileOverview overview = 1;
+}
+
+// Represents a list of logically grouped files that have changed e.g. configuration payload
+message UpdateOverviewRequest {
+    // Meta-information associated with a message
+    mpi.v1.MessageMeta message_meta = 1;
+    // The file overview of an instance
+    FileOverview overview = 2;
+}
+
+// Represents a the response from an UpdateOverviewRequest
+message UpdateOverviewResponse {
+    // The file overview with the list of files that were uploaded
+    FileOverview overview = 1;
+}
+
+// Represents a specific configuration version associated with an instance
+message ConfigVersion {
+    // The instance identifier
+    string instance_id = 1;
+    // The version of the configuration
+    string version = 2;
+}
+
+// Represents a collection of files
+message FileOverview {
+    // A list of files
+    repeated File files = 1;
+    // The configuration version of the current set of files
+    ConfigVersion config_version = 2;
+    // The config file path of an instance
+    string config_path = 3;
+}
+
+// Represents meta data about a file
+message File {
+    // Meta information about the file, the name (including path) and hash
+    FileMeta file_meta = 1;
+    // Unmanaged files will not be modified
+    bool unmanaged = 2;
+    // external file source
+    optional ExternalDataSource external_data_source = 3;
+}
+
+message ExternalDataSource {
+    // URL to the location of an external file
+    string location = 1;
+}
+
+// Represents the get file request
+message GetFileRequest {
+    // Meta-information associated with a message
+    mpi.v1.MessageMeta message_meta = 1;
+    // Meta-information associated with the file
+    FileMeta file_meta = 2;
+}
+
+// Represents the response to a get file request
+message GetFileResponse {
+    // The contents of a file
+    FileContents contents = 1;
+}
+
+// Represents the bytes contents of the file https://protobuf.dev/programming-guides/api/#dont-encode-data-in-a-string
+message FileContents {
+    // Byte representation of a file without encoding
+    bytes contents = 1;
+}
+
+// Meta information about the file, the name (including path) and hash
+message FileMeta {
+    // The full path of the file
+    string name = 1;
+    // The hash of the file contents sha256, hex encoded
+    string hash = 2;
+    // Last modified time of the file (created time if never modified)
+    google.protobuf.Timestamp modified_time = 3;
+    // The permission set associated with a particular file
+    string permissions = 4;
+    // The size of the file in bytes
+    int64 size = 5;
+    // additional file information
+    oneof file_type {
+       CertificateMeta certificate_meta = 6;
+    }
+}
+
+// Represents the update file request
+message UpdateFileRequest {
+    // The file requested to be updated
+    File file = 1;
+    // The contents of a file
+    FileContents contents = 2;
+    // Meta-information associated with a message
+    mpi.v1.MessageMeta message_meta = 3;
+}
+
+// Represents the response to an update file request
+message UpdateFileResponse {
+    // Meta-information associated with the updated file
+    FileMeta file_meta = 1;
+}
+
+// Define the certificate message based on https://pkg.go.dev/crypto/x509#Certificate 
+// and https://github.com/googleapis/googleapis/blob/005df4681b89bd204a90b76168a6dc9d9e7bf4fe/google/cloud/iot/v1/resources.proto#L341
+message CertificateMeta {
+    // Serial number of the certificate, usually a unique identifier, the max length is the length of an interger
+    string serial_number = 1;
+    
+    // Issuer details (who issued the certificate)
+    X509Name issuer = 2;
+
+    // Subject details (to whom the certificate is issued)
+    X509Name subject = 3;
+
+    // Subject Alternative Names (SAN) including DNS names and IP addresses
+    SubjectAlternativeNames sans = 4;
+    
+    // Timestamps representing the start of certificate validity (Not Before, Not After)
+    CertificateDates dates = 5;
+
+    // The algorithm used to sign the certificate (e.g., SHA256-RSA)
+    SignatureAlgorithm signature_algorithm = 6;
+
+    // The type of public key in the certificate.
+    string public_key_algorithm = 7;
+}
+
+// Represents the dates for which a certificate is valid
+message CertificateDates {
+    // The start date that for when the certificate is valid
+    int64 not_before = 1;
+    // The end date that for when the certificate is valid
+    int64 not_after = 2;
+}
+
+// Represents the Subject Alternative Names for a certificate
+message SubjectAlternativeNames {
+    // List of DNS names in the Subject Alternative Name (SAN) extension
+    repeated string dns_names = 1;
+
+    // List of ip addresses in the SAN extension
+    repeated string ip_addresses = 2;
+}
+
+// Enum to represent the possible signature algorithms used for certificates
+enum SignatureAlgorithm {
+    // Default, unknown or unsupported algorithm
+    SIGNATURE_ALGORITHM_UNKNOWN = 0;
+
+    // MD2 with RSA (Unsupported)
+    MD2_WITH_RSA = 1;
+
+    // MD5 with RSA (Only supported for signing, not verification)
+    MD5_WITH_RSA = 2;
+
+    // SHA-1 with RSA (Only supported for signing and for verification of CRLs, CSRs, and OCSP responses)
+    SHA1_WITH_RSA = 3;
+
+    // SHA-256 with RSA
+    SHA256_WITH_RSA = 4;
+
+    // SHA-384 with RSA
+    SHA384_WITH_RSA = 5;
+
+    // SHA-512 with RSA
+    SHA512_WITH_RSA = 6;
+
+    // DSA with SHA-1 (Unsupported)
+    DSA_WITH_SHA1 = 7;
+
+    // DSA with SHA-256 (Unsupported)
+    DSA_WITH_SHA256 = 8;
+
+    // ECDSA with SHA-1 (Only supported for signing and for verification of CRLs, CSRs, and OCSP responses)
+    ECDSA_WITH_SHA1 = 9;
+
+    // ECDSA with SHA-256
+    ECDSA_WITH_SHA256 = 10;
+
+    // ECDSA with SHA-384
+    ECDSA_WITH_SHA384 = 11;
+
+    // ECDSA with SHA-512
+    ECDSA_WITH_SHA512 = 12;
+
+    // SHA-256 with RSA-PSS
+    SHA256_WITH_RSA_PSS = 13;
+
+    // SHA-384 with RSA-PSS
+    SHA384_WITH_RSA_PSS = 14;
+
+    // SHA-512 with RSA-PSS
+    SHA512_WITH_RSA_PSS = 15;
+
+    // Pure Ed25519
+    PURE_ED25519 = 16;
+}
+
+// Represents the dates for which a certificate is valid as seen at https://pkg.go.dev/crypto/x509/pkix#Name
+message X509Name {
+    // Country name (C): Two-letter country code as per ISO 3166.
+    // Must be exactly 2 characters.
+    repeated string country = 1;
+    
+    // Organization name (O): Name of the organization.
+    repeated string organization = 2;
+    
+    // Organizational Unit name (OU): Name of a subdivision or unit within the organization.
+    repeated string organizational_unit = 3;
+    
+    // Locality name (L): Name of the city or locality.
+    // Must be non-empty and a reasonable length (e.g., max 100 characters).
+    repeated string locality = 4;
+    
+    // State or Province name (ST): Name of the state or province.
+    repeated string province = 5;
+    
+    // Street Address (STREET): Physical street address.
+    repeated string street_address = 6;
+    
+    // Postal Code (PC): Postal or ZIP code for the address.
+    repeated string postal_code = 7;
+    
+    // Serial Number (SN): Unique identifier or serial number.
+    string serial_number = 8;
+    
+    // Common Name (CN): Typically the person’s or entity's full name.
+    string common_name = 9;
+    
+    // Parsed attributes including any non-standard attributes, as specified in RFC 2253.
+    // These attributes are parsed but not marshaled by this package.
+    repeated AttributeTypeAndValue names = 10;
+    
+    // Additional attributes to be included in the marshaled distinguished names.
+    // These override any attributes with the same OID in `names`.
+    repeated AttributeTypeAndValue extra_names = 11;
+}
+    
+message AttributeTypeAndValue {
+    // The type (or identifier) of the attribute (e.g., OID).
+    string type = 1;
+  
+    // The value associated with the attribute.
+    string value = 2;
+}

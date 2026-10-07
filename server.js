@@ -1,16 +1,28 @@
 /**
  * nginx-manager — server.js
  *
- * Express backend:
- *  - /api/agents              CRUD for agent definitions (stored in agents.json)
- *  - /api/agents/:id/configs  per-agent raw config file CRUD
- *  - /api/agents/:id/certs    per-agent certificate management (scan remote + local store)
- *  - /api/agents/:id/sites    Visual-builder site CRUD (stored as JSON + auto-generates .conf)
- *  - /api/agents/:id/push     SSH-push a config file to an agent
- *  - /api/agents/:id/validate nginx -t via SSH
- *  - /api/agents/:id/reload   nginx -s reload via SSH
- *  - /api/agents/:id/status   nginx status check
- *  - Socket.IO                live log streaming for push/validate/reload/sync
+ * Web GUI + management plane for nginx servers running NGINX Agent v3.
+ *
+ *  - Servers are added manually in the UI. Each gets a random agent token (shown once,
+ *    stored only as a SHA-256 hash). No SSH, no host passwords.
+ *  - NGINX Agent on each server dials in over gRPC/TLS (lib/mpi.js), reports its nginx
+ *    instance and uploads the config files nginx references.
+ *  - Edits (raw files, visual-builder sites, certificates) are staged as a draft and pushed
+ *    with "Apply": the agent writes the files, runs `nginx -t`, reloads, and rolls back
+ *    automatically if anything fails.
+ *
+ *  REST
+ *   /api/agents                      list / add (manual) / edit / remove servers
+ *   /api/agents/:id/token            issue a new agent token
+ *   /api/agents/:id/setup            agent install instructions
+ *   /api/agents/:id/files            file list (live + pending changes)
+ *   /api/agents/:id/file?path=       read / stage edit / stage delete one file
+ *   /api/agents/:id/discard          drop pending changes
+ *   /api/agents/:id/apply|sync       push pending changes / re-pull files from the agent
+ *   /api/agents/:id/status           agent, nginx and health info
+ *   /api/agents/:id/sites            visual-builder site CRUD, preview, import
+ *   /api/agents/:id/certs            certificate registry, upload (staged), scan
+ *  Socket.IO (session-authenticated)  live operation log + apply/sync/status
  */
 
 'use strict';
@@ -20,221 +32,166 @@ require('dotenv').config();
 const express      = require('express');
 const session      = require('express-session');
 const bcrypt       = require('bcryptjs');
-const { NodeSSH }  = require('node-ssh');
 const http         = require('http');
+const crypto       = require('crypto');
 const { Server }   = require('socket.io');
 const multer       = require('multer');
-const fs           = require('fs');
 const path         = require('path');
-const { v4: uuidv4 } = require('uuid');
+const { randomUUID: uuidv4 } = require('crypto');
+
+const store = require('./lib/store');
+const { ensureTls } = require('./lib/tls');
+const { ManagementPlane } = require('./lib/mpi');
+const { siteToNginxConf, parseNginxConf } = require('./lib/nginxconf');
 
 // ---------------------------------------------------------------------------
-// Config & directories
+// Config
 // ---------------------------------------------------------------------------
 const PORT           = process.env.PORT || 3000;
-const SESSION_SECRET = process.env.SESSION_SECRET || 'change-me';
-const ADMIN_PASS = process.env.ADMIN_PASSWORD;
-if (!ADMIN_PASS) {
-  console.error('[nginx-manager] ERROR: ADMIN_PASSWORD is not set in .env');
-  console.error('[nginx-manager] Please set ADMIN_PASSWORD in your .env file before starting.');
-  console.error('[nginx-manager] Example:  echo "ADMIN_PASSWORD=YourSecurePassword" >> .env');
-  process.exit(1);
-}
-const DATA_DIR       = path.join(__dirname, 'data');
-const AGENTS_FILE    = path.join(DATA_DIR, 'agents.json');
-const CONFIGS_DIR    = path.join(DATA_DIR, 'configs');
-const CERTS_DIR      = path.join(DATA_DIR, 'certs');   // uploaded certs stored locally
-const SITES_DIR      = path.join(DATA_DIR, 'sites');   // visual-builder site JSON
+const GRPC_PORT      = parseInt(process.env.GRPC_PORT || '8443', 10);
+const SESSION_SECRET = process.env.SESSION_SECRET;
+const ADMIN_PASS     = process.env.ADMIN_PASSWORD;
 
-[DATA_DIR, CONFIGS_DIR, CERTS_DIR, SITES_DIR].forEach(d => {
-  if (!fs.existsSync(d)) fs.mkdirSync(d, { recursive: true });
-});
-
-if (!fs.existsSync(AGENTS_FILE)) fs.writeFileSync(AGENTS_FILE, JSON.stringify([], null, 2));
-
-// Multer — cert file uploads (PEM/CRT/KEY, max 1 MB each)
-const certUpload = multer({
-  dest: path.join(DATA_DIR, '_uploads'),
-  limits: { fileSize: 1 * 1024 * 1024 },
-});
-
-// ---------------------------------------------------------------------------
-// Helpers — agents
-// ---------------------------------------------------------------------------
-function readAgents() {
-  try { return JSON.parse(fs.readFileSync(AGENTS_FILE, 'utf8')); }
-  catch { return []; }
-}
-
-function writeAgents(agents) {
-  fs.writeFileSync(AGENTS_FILE, JSON.stringify(agents, null, 2));
-}
-
-function agentConfigDir(agentId) {
-  const d = path.join(CONFIGS_DIR, agentId);
-  if (!fs.existsSync(d)) fs.mkdirSync(d, { recursive: true });
-  return d;
-}
-
-function agentCertDir(agentId) {
-  const d = path.join(CERTS_DIR, agentId);
-  if (!fs.existsSync(d)) fs.mkdirSync(d, { recursive: true });
-  return d;
-}
-
-function agentSitesDir(agentId) {
-  const d = path.join(SITES_DIR, agentId);
-  if (!fs.existsSync(d)) fs.mkdirSync(d, { recursive: true });
-  return d;
-}
-
-function sudoPrefix(agent) {
-  return agent.sshUser === 'root' ? '' : 'sudo ';
-}
-
-// ---------------------------------------------------------------------------
-// SSH helpers
-// ---------------------------------------------------------------------------
-function makeConnOpts(agent) {
-  const o = { host: agent.host, port: agent.sshPort || 22, username: agent.sshUser };
-  if (agent.sshKeyPath && fs.existsSync(agent.sshKeyPath)) {
-    o.privateKeyPath = agent.sshKeyPath;
-  } else {
-    o.password = agent.sshPass;
-  }
-  return o;
-}
-
-async function sshExec(agent, command, emit) {
-  const ssh = new NodeSSH();
-  let output = '';
-  try {
-    await ssh.connect(makeConnOpts(agent));
-    const result = await ssh.execCommand(command, {
-      onStdout: c => { const l = c.toString(); output += l; if (emit) emit(l); },
-      onStderr:  c => { const l = c.toString(); output += l; if (emit) emit(l); },
-    });
-    ssh.dispose();
-    return { success: result.code === 0, code: result.code, output };
-  } catch (err) {
-    try { ssh.dispose(); } catch {}
-    const msg = `SSH error: ${err.message}`;
-    if (emit) emit(msg);
-    return { success: false, code: -1, output: msg };
+for (const [name, value] of [['ADMIN_PASSWORD', ADMIN_PASS], ['SESSION_SECRET', SESSION_SECRET]]) {
+  if (!value || value.startsWith('change-me')) {
+    console.error(`[nginx-manager] ERROR: ${name} is not set in .env`);
+    console.error('[nginx-manager] Run install.sh, or see .env.example for how to set it.');
+    process.exit(1);
   }
 }
 
-// ---------------------------------------------------------------------------
-// Visual-builder: generate nginx config from site definition
-// ---------------------------------------------------------------------------
-function siteToNginxConf(site, agent) {
-  const lines = [];
-  const ssl   = site.ssl && site.certFile;
-  const sudo  = sudoPrefix(agent);
-
-  const upstreamName = (site.id || site.name || 'backend').replace(/[^a-zA-Z0-9_]/g,'_');
-  if (site.upstream && site.upstream.length > 1) {
-    lines.push(`upstream ${upstreamName} {`);
-    if (site.lbMethod && site.lbMethod !== 'round_robin') lines.push(`    ${site.lbMethod};`);
-    for (const up of site.upstream) {
-      lines.push(`    server ${up};`);
-    }
-    lines.push(`}`);
-    lines.push(``);
-  }
-
-  const upstreamTarget = (site.upstream && site.upstream.length > 1)
-    ? `http://${upstreamName}`
-    : (site.upstream && site.upstream[0]) ? `http://${site.upstream[0]}` : null;
-
-  // Main server block
-  lines.push(`server {`);
-
-  if (ssl) {
-    lines.push(`    listen 443 ssl http2;`);
-    lines.push(`    listen [::]:443 ssl http2;`);
-  } else {
-    lines.push(`    listen ${site.listenPort || 80};`);
-    lines.push(`    listen [::]:${site.listenPort || 80};`);
-  }
-
-  if (site.serverName) lines.push(`    server_name ${site.serverName};`);
-
-  if (ssl) {
-    lines.push(``);
-    lines.push(`    # SSL / TLS`);
-    lines.push(`    ssl_certificate     ${site.certFile};`);
-    lines.push(`    ssl_certificate_key ${site.keyFile};`);
-    lines.push(`    ssl_protocols       TLSv1.2 TLSv1.3;`);
-    lines.push(`    ssl_ciphers         HIGH:!aNULL:!MD5;`);
-    lines.push(`    ssl_session_cache   shared:SSL:10m;`);
-    lines.push(`    ssl_session_timeout 10m;`);
-    if (site.hsts) {
-      lines.push(`    add_header Strict-Transport-Security "max-age=31536000; includeSubDomains" always;`);
+// v1 (SSH-based) server entries stored SSH passwords in agents.json — strip them.
+// Those servers need a token (Agent Setup → New Token) before their agent can connect.
+(function migrateV1Agents() {
+  const agents = store.readAgents();
+  let changed = 0;
+  for (const a of agents) {
+    if ('sshPass' in a || 'sshKeyPath' in a || 'sshUser' in a || 'sshPort' in a) {
+      if (a.host && !a.description) a.description = `was ${a.host}`;
+      delete a.sshPass; delete a.sshKeyPath; delete a.sshUser; delete a.sshPort; delete a.host;
+      changed++;
     }
   }
-
-  lines.push(``);
-  lines.push(`    # Logging`);
-  lines.push(`    access_log /var/log/nginx/${site.name.replace(/\s+/g,'_').toLowerCase()}_access.log;`);
-  lines.push(`    error_log  /var/log/nginx/${site.name.replace(/\s+/g,'_').toLowerCase()}_error.log;`);
-
-  if (site.type === 'proxy' && upstreamTarget) {
-    lines.push(``);
-    lines.push(`    location / {`);
-    lines.push(`        proxy_pass         ${upstreamTarget};`);
-    lines.push(`        proxy_http_version 1.1;`);
-    lines.push(`        proxy_set_header   Upgrade $http_upgrade;`);
-    lines.push(`        proxy_set_header   Connection "upgrade";`);
-    lines.push(`        proxy_set_header   Host $host;`);
-    lines.push(`        proxy_set_header   X-Real-IP $remote_addr;`);
-    lines.push(`        proxy_set_header   X-Forwarded-For $proxy_add_x_forwarded_for;`);
-    lines.push(`        proxy_set_header   X-Forwarded-Proto $scheme;`);
-    lines.push(`        proxy_read_timeout ${site.proxyTimeout || 60}s;`);
-    if (site.proxyBuffering === false) {
-      lines.push(`        proxy_buffering    off;`);
-    }
-    lines.push(`    }`);
-  } else if (site.type === 'static') {
-    lines.push(``);
-    lines.push(`    root  ${site.staticRoot || '/var/www/html'};`);
-    lines.push(`    index index.html index.htm;`);
-    lines.push(``);
-    lines.push(`    location / {`);
-    lines.push(`        try_files $uri $uri/ =404;`);
-    lines.push(`    }`);
-    lines.push(``);
-    lines.push(`    location ~* \\.(?:ico|css|js|gif|jpe?g|png|woff2?)$ {`);
-    lines.push(`        expires 1y;`);
-    lines.push(`        add_header Cache-Control "public, immutable";`);
-    lines.push(`    }`);
-  } else if (site.type === 'redirect') {
-    lines.push(``);
-    lines.push(`    return 301 ${site.redirectTo || 'https://$host$request_uri'};`);
+  if (changed) {
+    store.writeAgents(agents);
+    console.log(`[nginx-manager] Removed stored SSH credentials from ${changed} server(s); issue each an agent token via Agent Setup.`);
   }
+})();
 
-  if (site.extraDirectives) {
-    lines.push(``);
-    lines.push(`    # Custom directives`);
-    for (const d of site.extraDirectives.split('\n').filter(l => l.trim())) {
-      lines.push(`    ${d}`);
-    }
-  }
+const tls = ensureTls(path.join(store.DATA_DIR, 'tls'));
+const mp  = new ManagementPlane({ tls, port: GRPC_PORT });
 
-  lines.push(`}`);
+// Multer — cert file uploads (PEM/CRT/KEY, max 1 MB each), kept in memory
+const certUpload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 1 * 1024 * 1024 } });
 
-  // HTTP → HTTPS redirect block
-  if (ssl) {
-    lines.push(``);
-    lines.push(`server {`);
-    lines.push(`    listen 80;`);
-    lines.push(`    listen [::]:80;`);
-    if (site.serverName) lines.push(`    server_name ${site.serverName};`);
-    lines.push(`    return 301 https://$host$request_uri;`);
-    lines.push(`}`);
-  }
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+function publicAgent(a) {
+  const { tokenHash, ...rest } = a;
+  const st = store.readState(a.id);
+  return {
+    ...rest,
+    online: mp.isOnline(a.id),
+    pendingChanges: Object.keys(st.draft).length,
+    health: mp.health.get(a.id) || [],
+  };
+}
 
-  return lines.join('\n') + '\n';
+function requireAgent(req, res) {
+  const agent = store.findAgent(req.params.id);
+  if (!agent) res.status(404).json({ error: 'Server not found' });
+  return agent;
+}
+
+// The nginx main config dir for an agent, e.g. /etc/nginx
+function nginxDir(agent) {
+  const st = store.readState(agent.id);
+  if (st.configPath) return path.dirname(st.configPath);
+  return agent.nginxConfigPath || '/etc/nginx';
+}
+
+function confDir(agent) { return path.posix.join(nginxDir(agent), 'conf.d'); }
+
+function siteConfPath(agent, site) {
+  return path.posix.join(confDir(agent), `site_${site.name.replace(/[^a-zA-Z0-9_-]/g, '_')}.conf`);
+}
+
+// Absolute, normalized, no traversal — the agent additionally enforces allowed_directories.
+function cleanRemotePath(p) {
+  if (typeof p !== 'string' || !p.startsWith('/')) return null;
+  const norm = path.posix.normalize(p);
+  if (norm !== p || norm.endsWith('/') || norm.includes('\0')) return null;
+  return norm;
+}
+
+function fileStatus(st, name) {
+  const d = st.draft[name];
+  if (!d) return 'live';
+  if (d.deleted) return 'deleted';
+  return st.live[name] ? 'modified' : 'added';
+}
+
+function readFileContent(st, name) {
+  const d = st.draft[name];
+  const entry = d && !d.deleted ? d : st.live[name];
+  if (!entry) return null;
+  const buf = store.getBlob(entry.hash);
+  return buf ? buf.toString('utf8') : undefined;
+}
+
+function setupInfo(agent, req, token) {
+  const host = process.env.AGENT_CONNECT_HOST || req.hostname;
+  const tokenValue = token || '<paste the token shown when the server was added>';
+  const allowed = ['/etc/nginx', '/usr/local/etc/nginx', '/usr/share/nginx/modules',
+    '/var/run/nginx', '/var/log/nginx', '/etc/letsencrypt', '/etc/ssl/nginx'];
+  const agentConf = [
+    'log:',
+    '  level: info',
+    '  path: /var/log/nginx-agent/',
+    '',
+    'allowed_directories:',
+    ...allowed.map(d => `  - ${d}`),
+    '',
+    'features:',
+    '  - configuration',
+    '  - certificates',
+    '  - file-watcher',
+    '',
+    'command:',
+    '  server:',
+    `    host: ${host}`,
+    `    port: ${GRPC_PORT}`,
+    '    type: grpc',
+    '  auth:',
+    '    tokenpath: /etc/nginx-agent/manager.token',
+    '  tls:',
+    '    ca: /etc/nginx-agent/manager-ca.pem',
+    '    skip_verify: false',
+  ].join('\n') + '\n';
+
+  const script = [
+    '# Run as root on the nginx server',
+    '# 1. Install NGINX Agent v3 from the nginx.org repo (uses the existing nginx.org signing key)',
+    'echo "deb [signed-by=/usr/share/keyrings/nginx-archive-keyring.gpg] http://packages.nginx.org/nginx-agent/debian $(. /etc/os-release && echo $VERSION_CODENAME) agent" \\',
+    '  > /etc/apt/sources.list.d/nginx-agent.list',
+    'apt-get update && apt-get install -y nginx-agent',
+    '',
+    '# 2. Token + manager CA',
+    `install -m 600 /dev/null /etc/nginx-agent/manager.token && printf '%s' '${tokenValue}' > /etc/nginx-agent/manager.token`,
+    "cat > /etc/nginx-agent/manager-ca.pem <<'EOF'",
+    tls.ca.trim(),
+    'EOF',
+    '',
+    '# 3. Agent config',
+    "cat > /etc/nginx-agent/nginx-agent.conf <<'EOF'",
+    agentConf.trimEnd(),
+    'EOF',
+    '',
+    'systemctl enable --now nginx-agent && systemctl restart nginx-agent',
+  ].join('\n') + '\n';
+
+  return { host, port: GRPC_PORT, ca: tls.ca, agentConf, script, tokenIncluded: !!token };
 }
 
 // ---------------------------------------------------------------------------
@@ -242,16 +199,24 @@ function siteToNginxConf(site, agent) {
 // ---------------------------------------------------------------------------
 const app    = express();
 const server = http.createServer(app);
-const io     = new Server(server, { cors: { origin: '*' } });
+const io     = new Server(server);
 
-app.use(express.json({ limit: '10mb' }));
-app.use(express.urlencoded({ extended: true }));
-app.use(session({
+if (process.env.TRUST_PROXY) app.set('trust proxy', process.env.TRUST_PROXY);
+
+const sessionMiddleware = session({
   secret: SESSION_SECRET,
   resave: false,
   saveUninitialized: false,
-  cookie: { secure: false, maxAge: 24 * 60 * 60 * 1000 },
-}));
+  cookie: {
+    httpOnly: true,
+    sameSite: 'lax',
+    secure: process.env.COOKIE_SECURE === 'true',
+    maxAge: 24 * 60 * 60 * 1000,
+  },
+});
+
+app.use(express.json({ limit: '10mb' }));
+app.use(sessionMiddleware);
 app.use(express.static(path.join(__dirname, 'public')));
 
 function requireAuth(req, res, next) {
@@ -262,116 +227,221 @@ function requireAuth(req, res, next) {
 // ---------------------------------------------------------------------------
 // Auth
 // ---------------------------------------------------------------------------
+const loginFailures = new Map();   // ip -> { count, until }
+const MAX_FAILURES = 10, LOCKOUT_MS = 15 * 60 * 1000;
+
+async function checkPassword(password) {
+  if (typeof password !== 'string') return false;
+  if (/^\$2[aby]\$/.test(ADMIN_PASS)) return bcrypt.compare(password, ADMIN_PASS);
+  const a = crypto.createHash('sha256').update(password).digest();
+  const b = crypto.createHash('sha256').update(ADMIN_PASS).digest();
+  return crypto.timingSafeEqual(a, b);
+}
+
 app.post('/api/login', async (req, res) => {
-  const { password } = req.body;
-  let ok = false;
-  if (ADMIN_PASS.startsWith('$2')) {
-    ok = await bcrypt.compare(password, ADMIN_PASS);
-  } else {
-    ok = password === ADMIN_PASS;
+  const ip = req.ip;
+  const f = loginFailures.get(ip);
+  if (f && f.count >= MAX_FAILURES && f.until > Date.now()) {
+    return res.status(429).json({ error: 'Too many attempts — try again later' });
   }
-  if (!ok) return res.status(401).json({ error: 'Invalid password' });
-  req.session.authenticated = true;
-  res.json({ ok: true });
+  if (!(await checkPassword(req.body && req.body.password))) {
+    const cur = f && f.until > Date.now() ? f : { count: 0 };
+    loginFailures.set(ip, { count: cur.count + 1, until: Date.now() + LOCKOUT_MS });
+    return res.status(401).json({ error: 'Invalid password' });
+  }
+  loginFailures.delete(ip);
+  req.session.regenerate(err => {
+    if (err) return res.status(500).json({ error: 'Session error' });
+    req.session.authenticated = true;
+    res.json({ ok: true });
+  });
 });
-app.post('/api/logout', (req, res) => { req.session.destroy(); res.json({ ok: true }); });
+app.post('/api/logout', (req, res) => { req.session.destroy(() => res.json({ ok: true })); });
 app.get('/api/me', (req, res) => {
   res.json({ authenticated: !!(req.session && req.session.authenticated) });
 });
 
 // ---------------------------------------------------------------------------
-// Agent CRUD
+// Servers (manual add only — agents with unknown tokens are rejected)
 // ---------------------------------------------------------------------------
+const EDITABLE_AGENT_FIELDS = ['name', 'group', 'description', 'nginxConfigPath'];
+
+function pickAgentFields(body) {
+  const out = {};
+  for (const k of EDITABLE_AGENT_FIELDS) {
+    if (body[k] !== undefined) out[k] = String(body[k]).trim();
+  }
+  if (out.nginxConfigPath !== undefined && !cleanRemotePath(out.nginxConfigPath)) delete out.nginxConfigPath;
+  return out;
+}
+
 app.get('/api/agents', requireAuth, (req, res) => {
-  res.json(readAgents().map(a => ({ ...a, sshPass: a.sshPass ? '***' : undefined })));
+  res.json(store.readAgents().map(publicAgent));
 });
 
 app.post('/api/agents', requireAuth, (req, res) => {
-  const { name, host, sshPort, sshUser, sshPass, sshKeyPath, nginxConfigPath, description, group } = req.body;
-  if (!name || !host || !sshUser) return res.status(400).json({ error: 'name, host, sshUser required' });
-  const agents = readAgents();
+  const fields = pickAgentFields(req.body || {});
+  if (!fields.name) return res.status(400).json({ error: 'name required' });
+  const token = store.newToken();
   const agent = {
-    id: uuidv4(), name, host,
-    sshPort: sshPort || 22, sshUser,
-    sshPass: sshPass || '', sshKeyPath: sshKeyPath || '',
-    nginxConfigPath: nginxConfigPath || '/etc/nginx',
-    group: group || '',
-    description: description || '',
+    id: uuidv4(),
+    name: fields.name,
+    group: fields.group || '',
+    description: fields.description || '',
+    nginxConfigPath: fields.nginxConfigPath || '/etc/nginx',
+    tokenHash: store.hashToken(token),
     createdAt: new Date().toISOString(),
   };
+  const agents = store.readAgents();
   agents.push(agent);
-  writeAgents(agents);
-  res.json({ ...agent, sshPass: '***' });
+  store.writeAgents(agents);
+  io.emit('agents');
+  res.json({ ...publicAgent(agent), token, setup: setupInfo(agent, req, token) });
 });
 
 app.put('/api/agents/:id', requireAuth, (req, res) => {
-  const agents = readAgents();
-  const idx = agents.findIndex(a => a.id === req.params.id);
-  if (idx === -1) return res.status(404).json({ error: 'Not found' });
-  const updates = req.body;
-  if (!updates.sshPass || updates.sshPass === '***') delete updates.sshPass;
-  agents[idx] = { ...agents[idx], ...updates, id: agents[idx].id };
-  writeAgents(agents);
-  res.json({ ...agents[idx], sshPass: '***' });
+  const fields = pickAgentFields(req.body || {});
+  if (fields.name === '') delete fields.name;
+  const agent = store.updateAgent(req.params.id, fields);
+  if (!agent) return res.status(404).json({ error: 'Not found' });
+  io.emit('agents');
+  res.json(publicAgent(agent));
 });
 
 app.delete('/api/agents/:id', requireAuth, (req, res) => {
-  const agents = readAgents();
-  const newAgents = agents.filter(a => a.id !== req.params.id);
-  if (newAgents.length === agents.length) return res.status(404).json({ error: 'Not found' });
-  writeAgents(newAgents);
+  const agents = store.readAgents();
+  const remaining = agents.filter(a => a.id !== req.params.id);
+  if (remaining.length === agents.length) return res.status(404).json({ error: 'Not found' });
+  store.writeAgents(remaining);
+  store.removeAgentData(req.params.id);
+  const call = mp.streams.get(req.params.id);
+  if (call) { try { call.end(); } catch {} mp.streams.delete(req.params.id); }
+  io.emit('agents');
   res.json({ ok: true });
 });
 
+app.post('/api/agents/:id/token', requireAuth, (req, res) => {
+  const token = store.newToken();
+  const agent = store.updateAgent(req.params.id, { tokenHash: store.hashToken(token) });
+  if (!agent) return res.status(404).json({ error: 'Not found' });
+  const call = mp.streams.get(agent.id);
+  if (call) { try { call.end(); } catch {} mp.streams.delete(agent.id); }
+  io.emit('agents');
+  res.json({ token, setup: setupInfo(agent, req, token) });
+});
+
+app.get('/api/agents/:id/setup', requireAuth, (req, res) => {
+  const agent = requireAgent(req, res); if (!agent) return;
+  res.json(setupInfo(agent, req, null));
+});
+
+app.get('/api/agents/:id/status', requireAuth, (req, res) => {
+  const agent = requireAgent(req, res); if (!agent) return;
+  const st = store.readState(agent.id);
+  res.json({
+    ...publicAgent(agent),
+    instanceId: st.instanceId,
+    configPath: st.configPath,
+    fileCount: Object.keys(st.live).length,
+  });
+});
+
 // ---------------------------------------------------------------------------
-// Config file CRUD
+// Config files (live from the agent + staged draft)
 // ---------------------------------------------------------------------------
-app.get('/api/agents/:id/configs', requireAuth, (req, res) => {
-  if (!readAgents().find(a => a.id === req.params.id)) return res.status(404).json({ error: 'Agent not found' });
-  const dir = agentConfigDir(req.params.id);
-  const files = fs.readdirSync(dir).filter(f => f.endsWith('.conf') || f.endsWith('.nginx'));
-  res.json(files.map(f => {
-    const stat = fs.statSync(path.join(dir, f));
-    return { name: f, size: stat.size, modified: stat.mtime.toISOString() };
-  }));
+app.get('/api/agents/:id/files', requireAuth, (req, res) => {
+  const agent = requireAgent(req, res); if (!agent) return;
+  const st = store.readState(agent.id);
+  const names = new Set([...Object.keys(st.live), ...Object.keys(st.draft)]);
+  const files = [...names].sort().map(name => {
+    const d = st.draft[name];
+    const e = d && !d.deleted ? d : st.live[name];
+    return {
+      name,
+      size: e ? e.size : 0,
+      modified: e ? e.modifiedTime : null,
+      status: fileStatus(st, name),
+      isCert: !!(e && e.certificateMeta),
+      synced: !!(e && store.hasBlob(e.hash)),
+    };
+  });
+  res.json({ instanceId: st.instanceId, configPath: st.configPath, confDir: confDir(agent), files });
 });
 
-app.get('/api/agents/:id/configs/:filename', requireAuth, (req, res) => {
-  const filePath = path.join(agentConfigDir(req.params.id), path.basename(req.params.filename));
-  if (!fs.existsSync(filePath)) return res.status(404).json({ error: 'File not found' });
-  res.json({ name: req.params.filename, content: fs.readFileSync(filePath, 'utf8') });
+app.get('/api/agents/:id/file', requireAuth, (req, res) => {
+  const agent = requireAgent(req, res); if (!agent) return;
+  const name = cleanRemotePath(req.query.path);
+  if (!name) return res.status(400).json({ error: 'absolute path required' });
+  const st = store.readState(agent.id);
+  const content = readFileContent(st, name);
+  if (content === null) return res.status(404).json({ error: 'File not found' });
+  if (content === undefined) return res.status(409).json({ error: 'Contents not synced from the agent yet — run Sync' });
+  res.json({ name, content, status: fileStatus(st, name) });
 });
 
-app.put('/api/agents/:id/configs/:filename', requireAuth, (req, res) => {
-  const { content } = req.body;
-  if (content === undefined) return res.status(400).json({ error: 'content required' });
-  const filePath = path.join(agentConfigDir(req.params.id), path.basename(req.params.filename));
-  fs.writeFileSync(filePath, content, 'utf8');
-  res.json({ ok: true, name: req.params.filename });
+app.put('/api/agents/:id/file', requireAuth, (req, res) => {
+  const agent = requireAgent(req, res); if (!agent) return;
+  const name = cleanRemotePath(req.query.path);
+  if (!name) return res.status(400).json({ error: 'absolute path required' });
+  const { content } = req.body || {};
+  if (typeof content !== 'string') return res.status(400).json({ error: 'content required' });
+  const st = store.stageFile(agent.id, name, content);
+  io.emit('files', { agentId: agent.id });
+  res.json({ ok: true, name, status: fileStatus(st, name) });
 });
 
-app.delete('/api/agents/:id/configs/:filename', requireAuth, (req, res) => {
-  const filePath = path.join(agentConfigDir(req.params.id), path.basename(req.params.filename));
-  if (!fs.existsSync(filePath)) return res.status(404).json({ error: 'File not found' });
-  fs.unlinkSync(filePath);
+app.delete('/api/agents/:id/file', requireAuth, (req, res) => {
+  const agent = requireAgent(req, res); if (!agent) return;
+  const name = cleanRemotePath(req.query.path);
+  if (!name) return res.status(400).json({ error: 'absolute path required' });
+  store.stageDelete(agent.id, name);
+  io.emit('files', { agentId: agent.id });
   res.json({ ok: true });
 });
 
-// ---------------------------------------------------------------------------
-// Certificate management
-// ---------------------------------------------------------------------------
+app.post('/api/agents/:id/discard', requireAuth, (req, res) => {
+  const agent = requireAgent(req, res); if (!agent) return;
+  const st = store.readState(agent.id);
+  const only = req.body && req.body.path ? cleanRemotePath(req.body.path) : null;
+  if (only) delete st.draft[only];
+  else st.draft = {};
+  store.writeState(agent.id, st);
+  io.emit('files', { agentId: agent.id });
+  io.emit('agents');
+  res.json({ ok: true });
+});
 
-// List certs stored locally for this agent
+app.post('/api/agents/:id/apply', requireAuth, async (req, res) => {
+  const agent = requireAgent(req, res); if (!agent) return;
+  res.json(await mp.configApply(agent.id));
+});
+
+app.post('/api/agents/:id/sync', requireAuth, async (req, res) => {
+  const agent = requireAgent(req, res); if (!agent) return;
+  res.json(await mp.configUpload(agent.id));
+});
+
+// ---------------------------------------------------------------------------
+// Certificates
+// ---------------------------------------------------------------------------
+function certWithMeta(agentId, cert) {
+  const st = store.readState(agentId);
+  const desired = store.desiredFiles(st);
+  const f = desired[cert.remoteCertPath];
+  return {
+    ...cert,
+    certificateMeta: f ? f.certificateMeta || null : null,
+    onServer: !!st.live[cert.remoteCertPath],
+    pending: [cert.remoteCertPath, cert.remoteKeyPath, cert.remoteChainPath].some(p => p && st.draft[p]),
+  };
+}
+
 app.get('/api/agents/:id/certs', requireAuth, (req, res) => {
-  if (!readAgents().find(a => a.id === req.params.id)) return res.status(404).json({ error: 'Agent not found' });
-  const dir = agentCertDir(req.params.id);
-  const metaFile = path.join(dir, 'certs.json');
-  let certs = [];
-  try { certs = JSON.parse(fs.readFileSync(metaFile, 'utf8')); } catch {}
-  res.json(certs);
+  const agent = requireAgent(req, res); if (!agent) return;
+  res.json(store.readCerts(agent.id).map(c => certWithMeta(agent.id, c)));
 });
 
-// Upload a cert+key pair
+// Upload a cert+key pair — staged as files at the remote paths, pushed with Apply
 app.post('/api/agents/:id/certs', requireAuth,
   certUpload.fields([
     { name: 'certFile', maxCount: 1 },
@@ -379,607 +449,280 @@ app.post('/api/agents/:id/certs', requireAuth,
     { name: 'chainFile', maxCount: 1 },
   ]),
   (req, res) => {
-    const agent = readAgents().find(a => a.id === req.params.id);
-    if (!agent) return res.status(404).json({ error: 'Agent not found' });
+    const agent = requireAgent(req, res); if (!agent) return;
+    const { label } = req.body;
+    const remoteCertPath  = cleanRemotePath(req.body.remoteCertPath);
+    const remoteKeyPath   = cleanRemotePath(req.body.remoteKeyPath);
+    const remoteChainPath = req.body.remoteChainPath ? cleanRemotePath(req.body.remoteChainPath) : null;
+    const file = n => req.files && req.files[n] && req.files[n][0];
 
-    const { label, remoteCertPath, remoteKeyPath } = req.body;
     if (!label) return res.status(400).json({ error: 'label required' });
+    if (!remoteCertPath || !remoteKeyPath) return res.status(400).json({ error: 'absolute remote cert and key paths required' });
+    if (!file('certFile') || !file('keyFile')) return res.status(400).json({ error: 'certificate and key files required' });
+    if (req.body.remoteChainPath && !remoteChainPath) return res.status(400).json({ error: 'chain path must be absolute' });
 
-    const dir    = agentCertDir(req.params.id);
-    const certId = uuidv4();
-    const certEntry = {
-      id: certId,
-      label,
+    store.stageFile(agent.id, remoteCertPath, file('certFile').buffer, '0644');
+    store.stageFile(agent.id, remoteKeyPath,  file('keyFile').buffer,  '0600');
+    if (file('chainFile') && remoteChainPath) store.stageFile(agent.id, remoteChainPath, file('chainFile').buffer, '0644');
+
+    const certs = store.readCerts(agent.id);
+    const entry = {
+      id: uuidv4(), label,
+      remoteCertPath, remoteKeyPath,
+      remoteChainPath: file('chainFile') ? remoteChainPath : null,
+      uploaded: true,
       createdAt: new Date().toISOString(),
-      // remote paths (where nginx expects the cert on the server)
-      remoteCertPath: remoteCertPath || '',
-      remoteKeyPath:  remoteKeyPath  || '',
-      // local stored filenames
-      localCert:  null,
-      localKey:   null,
-      localChain: null,
     };
-
-    const move = (fieldName, suffix) => {
-      if (req.files && req.files[fieldName] && req.files[fieldName][0]) {
-        const tmp = req.files[fieldName][0].path;
-        const dest = path.join(dir, `${certId}_${suffix}`);
-        fs.renameSync(tmp, dest);
-        return dest;
-      }
-      return null;
-    };
-
-    certEntry.localCert  = move('certFile',  'cert.pem');
-    certEntry.localKey   = move('keyFile',   'key.pem');
-    certEntry.localChain = move('chainFile', 'chain.pem');
-
-    // Load existing and append
-    const metaFile = path.join(dir, 'certs.json');
-    let certs = [];
-    try { certs = JSON.parse(fs.readFileSync(metaFile, 'utf8')); } catch {}
-    certs.push(certEntry);
-    fs.writeFileSync(metaFile, JSON.stringify(certs, null, 2));
-
-    res.json(certEntry);
+    certs.push(entry);
+    store.writeCerts(agent.id, certs);
+    io.emit('files', { agentId: agent.id });
+    io.emit('agents');
+    res.json(certWithMeta(agent.id, entry));
   }
 );
 
-// Manually register a cert that already exists on the remote server (no upload)
+// Register a cert that already exists on the server (no upload)
 app.post('/api/agents/:id/certs/remote', requireAuth, (req, res) => {
-  const agent = readAgents().find(a => a.id === req.params.id);
-  if (!agent) return res.status(404).json({ error: 'Agent not found' });
-  const { label, remoteCertPath, remoteKeyPath } = req.body;
+  const agent = requireAgent(req, res); if (!agent) return;
+  const { label } = req.body || {};
+  const remoteCertPath = cleanRemotePath(req.body && req.body.remoteCertPath);
+  const remoteKeyPath  = cleanRemotePath(req.body && req.body.remoteKeyPath);
   if (!label || !remoteCertPath || !remoteKeyPath)
-    return res.status(400).json({ error: 'label, remoteCertPath, remoteKeyPath required' });
-
-  const dir      = agentCertDir(req.params.id);
-  const metaFile = path.join(dir, 'certs.json');
-  let certs = [];
-  try { certs = JSON.parse(fs.readFileSync(metaFile, 'utf8')); } catch {}
-
+    return res.status(400).json({ error: 'label and absolute remoteCertPath, remoteKeyPath required' });
+  const certs = store.readCerts(agent.id);
   const cert = {
-    id: uuidv4(), label,
-    remoteCertPath, remoteKeyPath,
-    localCert: null, localKey: null, localChain: null,
-    createdAt: new Date().toISOString(),
-    remoteOnly: true,
+    id: uuidv4(), label, remoteCertPath, remoteKeyPath, remoteChainPath: null,
+    remoteOnly: true, createdAt: new Date().toISOString(),
   };
   certs.push(cert);
-  fs.writeFileSync(metaFile, JSON.stringify(certs, null, 2));
-  res.json(cert);
+  store.writeCerts(agent.id, certs);
+  res.json(certWithMeta(agent.id, cert));
 });
 
-// Scan the remote server for existing certs (looks in common paths)
-app.post('/api/agents/:id/certs/scan', requireAuth, async (req, res) => {
-  const agent = readAgents().find(a => a.id === req.params.id);
-  if (!agent) return res.status(404).json({ error: 'Agent not found' });
+// "Scan" the certificate files the agent reported (those referenced by nginx config
+// in its allowed directories) and auto-register cert/key pairs.
+app.post('/api/agents/:id/certs/scan', requireAuth, (req, res) => {
+  const agent = requireAgent(req, res); if (!agent) return;
+  const st = store.readState(agent.id);
+  const files = Object.keys(st.live).filter(f => /\.(pem|crt|cer|key)$/i.test(f) || st.live[f].certificateMeta).sort();
 
-  const sudo = sudoPrefix(agent);
-
-  // Restricted to /etc/ssl/nginx and /etc/letsencrypt (all subdirectories)
-  const scanCmd = `${sudo}find /etc/ssl/nginx /etc/letsencrypt ` +
-    `\\( -name "*.pem" -o -name "*.crt" -o -name "*.cer" -o -name "*.key" \\) ` +
-    `2>/dev/null | sort`;
-
-  const result = await sshExec(agent, scanCmd);
-  const files  = result.output.trim().split('\n').filter(f => f.trim());
-
-  // ── Heuristics to match cert+key pairs ──────────────────────────────────
-  // A file is a "cert" if its basename contains: fullchain, cert, crt, certificate
-  // or the extension is .crt/.cer, and it does NOT look like a key.
-  // A file is a "key" if its basename contains: privkey, key, private.
-  const isCert = f => {
-    const b = path.basename(f).toLowerCase();
-    return !b.includes('key') && !b.includes('private') &&
-      (b.includes('fullchain') || b.includes('cert') || b.includes('crt') ||
-       b.includes('certificate') || b.endsWith('.crt') || b.endsWith('.cer') ||
-       (b.endsWith('.pem') && !b.includes('chain') === false) ||
-       b.endsWith('.pem'));
-  };
+  // A file is a "cert" if the agent parsed certificate metadata from it, or by name;
+  // a file is a "key" if its basename contains privkey / private / key.
   const isKey = f => {
     const b = path.basename(f).toLowerCase();
-    return b.includes('privkey') || b.includes('private') || b.includes('.key') ||
+    return b.includes('privkey') || b.includes('private') || b.endsWith('.key') ||
       (b.includes('key') && b.endsWith('.pem'));
   };
+  const isCert = f => !isKey(f) && (!!st.live[f].certificateMeta || /\.(pem|crt|cer)$/i.test(f));
 
-  // Group by directory
   const byDir = {};
-  for (const f of files) {
-    const d = path.dirname(f);
-    if (!byDir[d]) byDir[d] = [];
-    byDir[d].push(f);
-  }
+  for (const f of files) (byDir[path.dirname(f)] = byDir[path.dirname(f)] || []).push(f);
 
-  // Build suggestions — prefer fullchain.pem + privkey.pem (Let's Encrypt layout)
   const suggestions = Object.entries(byDir).map(([dir, dirFiles]) => {
     const certs = dirFiles.filter(isCert);
     const keys  = dirFiles.filter(isKey);
-
-    // Best cert: prefer fullchain.pem, then cert.pem, then first cert found
     const bestCert = certs.find(f => path.basename(f) === 'fullchain.pem')
       || certs.find(f => path.basename(f).startsWith('cert'))
       || certs[0];
-
-    // Best key: prefer privkey.pem, then first key found
     const bestKey = keys.find(f => path.basename(f) === 'privkey.pem')
       || keys.find(f => path.basename(f).includes('privkey'))
       || keys[0];
-
     return { dir, files: dirFiles, certs, keys, bestCert, bestKey };
   }).filter(s => s.certs.length > 0 || s.keys.length > 0);
 
-  // ── Auto-register valid pairs that aren't already stored ────────────────
+  const stored = store.readCerts(agent.id);
   const autoRegistered = [];
-  if (suggestions.length > 0) {
-    const certDir  = agentCertDir(req.params.id);
-    const metaFile = path.join(certDir, 'certs.json');
-    let stored = [];
-    try { stored = JSON.parse(fs.readFileSync(metaFile, 'utf8')); } catch {}
-
-    for (const sg of suggestions) {
-      if (!sg.bestCert || !sg.bestKey) continue;
-
-      // Skip if this cert path is already registered
-      const alreadyExists = stored.some(c =>
-        c.remoteCertPath === sg.bestCert && c.remoteKeyPath === sg.bestKey
-      );
-      if (alreadyExists) continue;
-
-      // Derive a readable label from the directory name
-      //  /etc/letsencrypt/live/example.com → "example.com"
-      //  /etc/ssl/nginx/mysite             → "mysite"
-      const dirParts = sg.dir.split('/').filter(Boolean);
-      const label    = dirParts[dirParts.length - 1] || sg.dir;
-
-      const newCert = {
-        id:             uuidv4(),
-        label,
-        remoteCertPath: sg.bestCert,
-        remoteKeyPath:  sg.bestKey,
-        remoteChainPath: sg.certs.find(f => path.basename(f).includes('chain') && f !== sg.bestCert) || null,
-        localCert:      null,
-        localKey:       null,
-        localChain:     null,
-        createdAt:      new Date().toISOString(),
-        remoteOnly:     true,
-        autoDiscovered: true,
-      };
-      stored.push(newCert);
-      autoRegistered.push(newCert);
-    }
-
-    if (autoRegistered.length > 0) {
-      fs.writeFileSync(metaFile, JSON.stringify(stored, null, 2));
-    }
+  for (const sg of suggestions) {
+    if (!sg.bestCert || !sg.bestKey) continue;
+    if (stored.some(c => c.remoteCertPath === sg.bestCert && c.remoteKeyPath === sg.bestKey)) continue;
+    const dirParts = sg.dir.split('/').filter(Boolean);
+    const cert = {
+      id: uuidv4(),
+      label: dirParts[dirParts.length - 1] || sg.dir,
+      remoteCertPath: sg.bestCert,
+      remoteKeyPath: sg.bestKey,
+      remoteChainPath: sg.certs.find(f => path.basename(f).includes('chain') && f !== sg.bestCert) || null,
+      remoteOnly: true,
+      autoDiscovered: true,
+      createdAt: new Date().toISOString(),
+    };
+    stored.push(cert);
+    autoRegistered.push(cert);
   }
+  if (autoRegistered.length) store.writeCerts(agent.id, stored);
 
   res.json({ files, suggestions, autoRegistered });
 });
 
-// Push a locally-stored cert to the remote server
-app.post('/api/agents/:id/certs/:certId/push', requireAuth, async (req, res) => {
-  const agent = readAgents().find(a => a.id === req.params.id);
-  if (!agent) return res.status(404).json({ error: 'Agent not found' });
-
-  const dir      = agentCertDir(req.params.id);
-  const metaFile = path.join(dir, 'certs.json');
-  let certs = [];
-  try { certs = JSON.parse(fs.readFileSync(metaFile, 'utf8')); } catch {}
-  const cert = certs.find(c => c.id === req.params.certId);
-  if (!cert) return res.status(404).json({ error: 'Cert not found' });
-  if (!cert.localCert || !cert.localKey)
-    return res.status(400).json({ error: 'No local cert/key files uploaded for this cert' });
-  if (!cert.remoteCertPath || !cert.remoteKeyPath)
-    return res.status(400).json({ error: 'remoteCertPath and remoteKeyPath must be set' });
-
-  const sudo = sudoPrefix(agent);
-  const ssh  = new NodeSSH();
-  const log  = [];
-  try {
-    await ssh.connect(makeConnOpts(agent));
-
-    // Ensure remote directories exist
-    const certDir = path.dirname(cert.remoteCertPath);
-    const keyDir  = path.dirname(cert.remoteKeyPath);
-    await ssh.execCommand(`${sudo}mkdir -p ${certDir} ${keyDir}`);
-
-    // Upload cert
-    const certContent = fs.readFileSync(cert.localCert, 'utf8');
-    const r1 = await ssh.execCommand(
-      `${sudo}tee ${cert.remoteCertPath} > /dev/null << 'PEMEOF'\n${certContent}\nPEMEOF`
-    );
-    log.push(`cert: ${r1.code === 0 ? 'uploaded' : r1.stderr}`);
-
-    // Upload key
-    const keyContent = fs.readFileSync(cert.localKey, 'utf8');
-    const r2 = await ssh.execCommand(
-      `${sudo}tee ${cert.remoteKeyPath} > /dev/null << 'PEMEOF'\n${keyContent}\nPEMEOF`
-    );
-    log.push(`key: ${r2.code === 0 ? 'uploaded' : r2.stderr}`);
-
-    // Set correct permissions on key
-    await ssh.execCommand(`${sudo}chmod 600 ${cert.remoteKeyPath}`);
-
-    // Upload chain if present
-    if (cert.localChain && cert.remoteChainPath) {
-      const chain = fs.readFileSync(cert.localChain, 'utf8');
-      const r3 = await ssh.execCommand(
-        `${sudo}tee ${cert.remoteChainPath} > /dev/null << 'PEMEOF'\n${chain}\nPEMEOF`
-      );
-      log.push(`chain: ${r3.code === 0 ? 'uploaded' : r3.stderr}`);
-    }
-
-    ssh.dispose();
-    res.json({ ok: true, log });
-  } catch (err) {
-    try { ssh.dispose(); } catch {}
-    res.status(500).json({ error: err.message, log });
+app.put('/api/agents/:id/certs/:certId', requireAuth, (req, res) => {
+  const agent = requireAgent(req, res); if (!agent) return;
+  const certs = store.readCerts(agent.id);
+  const idx = certs.findIndex(c => c.id === req.params.certId);
+  if (idx === -1) return res.status(404).json({ error: 'Cert not found' });
+  const { label } = req.body || {};
+  if (label) certs[idx].label = label;
+  for (const k of ['remoteCertPath', 'remoteKeyPath', 'remoteChainPath']) {
+    const v = req.body && req.body[k] ? cleanRemotePath(req.body[k]) : null;
+    if (v) certs[idx][k] = v;
   }
+  store.writeCerts(agent.id, certs);
+  res.json(certWithMeta(agent.id, certs[idx]));
 });
 
-// Delete a locally-stored cert entry
+// Removes the registry entry only — files on the server are left alone.
 app.delete('/api/agents/:id/certs/:certId', requireAuth, (req, res) => {
-  const dir      = agentCertDir(req.params.id);
-  const metaFile = path.join(dir, 'certs.json');
-  let certs = [];
-  try { certs = JSON.parse(fs.readFileSync(metaFile, 'utf8')); } catch {}
-  const cert = certs.find(c => c.id === req.params.certId);
-  if (!cert) return res.status(404).json({ error: 'Cert not found' });
-
-  // Remove local files
-  [cert.localCert, cert.localKey, cert.localChain].filter(Boolean).forEach(f => {
-    try { if (fs.existsSync(f)) fs.unlinkSync(f); } catch {}
-  });
-
-  fs.writeFileSync(metaFile, JSON.stringify(certs.filter(c => c.id !== req.params.certId), null, 2));
+  const agent = requireAgent(req, res); if (!agent) return;
+  const certs = store.readCerts(agent.id);
+  if (!certs.some(c => c.id === req.params.certId)) return res.status(404).json({ error: 'Cert not found' });
+  store.writeCerts(agent.id, certs.filter(c => c.id !== req.params.certId));
   res.json({ ok: true });
 });
 
-// Update a cert entry (label, remote paths)
-app.put('/api/agents/:id/certs/:certId', requireAuth, (req, res) => {
-  const dir      = agentCertDir(req.params.id);
-  const metaFile = path.join(dir, 'certs.json');
-  let certs = [];
-  try { certs = JSON.parse(fs.readFileSync(metaFile, 'utf8')); } catch {}
-  const idx = certs.findIndex(c => c.id === req.params.certId);
-  if (idx === -1) return res.status(404).json({ error: 'Cert not found' });
-  const { label, remoteCertPath, remoteKeyPath, remoteChainPath } = req.body;
-  if (label)           certs[idx].label           = label;
-  if (remoteCertPath)  certs[idx].remoteCertPath  = remoteCertPath;
-  if (remoteKeyPath)   certs[idx].remoteKeyPath   = remoteKeyPath;
-  if (remoteChainPath) certs[idx].remoteChainPath = remoteChainPath;
-  fs.writeFileSync(metaFile, JSON.stringify(certs, null, 2));
-  res.json(certs[idx]);
-});
-
 // ---------------------------------------------------------------------------
-// Visual-builder Sites CRUD
+// Visual-builder Sites
 // ---------------------------------------------------------------------------
-app.get('/api/agents/:id/sites', requireAuth, (req, res) => {
-  if (!readAgents().find(a => a.id === req.params.id)) return res.status(404).json({ error: 'Agent not found' });
-  const dir = agentSitesDir(req.params.id);
-  const files = fs.readdirSync(dir).filter(f => f.endsWith('.json'));
-  const sites = files.map(f => {
-    try { return JSON.parse(fs.readFileSync(path.join(dir, f), 'utf8')); }
-    catch { return null; }
-  }).filter(Boolean);
-  res.json(sites);
-});
-
-app.post('/api/agents/:id/sites', requireAuth, (req, res) => {
-  const agent = readAgents().find(a => a.id === req.params.id);
-  if (!agent) return res.status(404).json({ error: 'Agent not found' });
-
-  const site = {
-    id:              uuidv4(),
-    name:            req.body.name            || 'New Site',
-    type:            req.body.type            || 'proxy',      // proxy | static | redirect
-    serverName:      req.body.serverName      || '',
-    listenPort:      req.body.listenPort      || 80,
-    upstream:        req.body.upstream        || [],           // array of host:port
-    lbMethod:        req.body.lbMethod        || 'round_robin',
-    staticRoot:      req.body.staticRoot      || '/var/www/html',
-    redirectTo:      req.body.redirectTo      || '',
-    ssl:             req.body.ssl             || false,
-    certId:          req.body.certId          || null,         // links to certs store
-    certFile:        req.body.certFile        || '',           // remote path
-    keyFile:         req.body.keyFile         || '',           // remote path
-    hsts:            req.body.hsts            || false,
-    proxyTimeout:    req.body.proxyTimeout    || 60,
-    proxyBuffering:  req.body.proxyBuffering  !== false,
-    extraDirectives: req.body.extraDirectives || '',
-    enabled:         req.body.enabled         !== false,
-    createdAt:       new Date().toISOString(),
-    updatedAt:       new Date().toISOString(),
-  };
-
-  const dir      = agentSitesDir(req.params.id);
-  const siteFile = path.join(dir, `${site.id}.json`);
-  fs.writeFileSync(siteFile, JSON.stringify(site, null, 2));
-
-  // Also write generated config
-  const confDir  = agentConfigDir(req.params.id);
-  const confFile = path.join(confDir, `site_${site.name.replace(/[^a-zA-Z0-9_-]/g,'_')}.conf`);
-  fs.writeFileSync(confFile, siteToNginxConf(site, agent));
-
-  res.json(site);
-});
-
-app.put('/api/agents/:id/sites/:siteId', requireAuth, (req, res) => {
-  const agent = readAgents().find(a => a.id === req.params.id);
-  if (!agent) return res.status(404).json({ error: 'Agent not found' });
-
-  const dir      = agentSitesDir(req.params.id);
-  const siteFile = path.join(dir, `${req.params.siteId}.json`);
-  if (!fs.existsSync(siteFile)) return res.status(404).json({ error: 'Site not found' });
-
-  const existing = JSON.parse(fs.readFileSync(siteFile, 'utf8'));
-  const site = { ...existing, ...req.body, id: existing.id, createdAt: existing.createdAt, updatedAt: new Date().toISOString() };
-
-  // If SSL enabled and certId provided, resolve cert paths
+function resolveCertPaths(agentId, site) {
   if (site.ssl && site.certId) {
-    const certDir  = agentCertDir(req.params.id);
-    const metaFile = path.join(certDir, 'certs.json');
-    let certs = [];
-    try { certs = JSON.parse(fs.readFileSync(metaFile, 'utf8')); } catch {}
-    const cert = certs.find(c => c.id === site.certId);
+    const cert = store.readCerts(agentId).find(c => c.id === site.certId);
     if (cert) {
       site.certFile = cert.remoteCertPath || site.certFile;
       site.keyFile  = cert.remoteKeyPath  || site.keyFile;
     }
   }
+  return site;
+}
 
-  fs.writeFileSync(siteFile, JSON.stringify(site, null, 2));
+app.get('/api/agents/:id/sites', requireAuth, (req, res) => {
+  const agent = requireAgent(req, res); if (!agent) return;
+  res.json(store.readSites(agent.id));
+});
 
-  // Regenerate the config file (delete old name if it changed)
-  const confDir    = agentConfigDir(req.params.id);
-  const oldConf    = path.join(confDir, `site_${existing.name.replace(/[^a-zA-Z0-9_-]/g,'_')}.conf`);
-  const newConf    = path.join(confDir, `site_${site.name.replace(/[^a-zA-Z0-9_-]/g,'_')}.conf`);
-  if (oldConf !== newConf && fs.existsSync(oldConf)) fs.unlinkSync(oldConf);
-  fs.writeFileSync(newConf, siteToNginxConf(site, agent));
+app.post('/api/agents/:id/sites', requireAuth, (req, res) => {
+  const agent = requireAgent(req, res); if (!agent) return;
+  const b = req.body || {};
+  const site = resolveCertPaths(agent.id, {
+    id:              uuidv4(),
+    name:            b.name            || 'New Site',
+    type:            b.type            || 'proxy',      // proxy | static | redirect
+    serverName:      b.serverName      || '',
+    listenPort:      b.listenPort      || 80,
+    upstream:        b.upstream        || [],           // array of host:port
+    lbMethod:        b.lbMethod        || 'round_robin',
+    staticRoot:      b.staticRoot      || '/var/www/html',
+    redirectTo:      b.redirectTo      || '',
+    ssl:             b.ssl             || false,
+    certId:          b.certId          || null,         // links to certs store
+    certFile:        b.certFile        || '',           // remote path
+    keyFile:         b.keyFile         || '',           // remote path
+    hsts:            b.hsts            || false,
+    proxyTimeout:    b.proxyTimeout    || 60,
+    proxyBuffering:  b.proxyBuffering  !== false,
+    extraDirectives: b.extraDirectives || '',
+    enabled:         b.enabled         !== false,
+    createdAt:       new Date().toISOString(),
+    updatedAt:       new Date().toISOString(),
+  });
+  site.confPath = siteConfPath(agent, site);
+  store.writeSite(agent.id, site);
+  store.stageFile(agent.id, site.confPath, siteToNginxConf(site));
+  io.emit('files', { agentId: agent.id });
+  io.emit('agents');
+  res.json(site);
+});
 
+app.put('/api/agents/:id/sites/:siteId', requireAuth, (req, res) => {
+  const agent = requireAgent(req, res); if (!agent) return;
+  const existing = store.readSite(agent.id, req.params.siteId);
+  if (!existing) return res.status(404).json({ error: 'Site not found' });
+
+  const site = resolveCertPaths(agent.id, {
+    ...existing, ...req.body,
+    id: existing.id, createdAt: existing.createdAt, updatedAt: new Date().toISOString(),
+  });
+  // Imported sites keep their original file; builder sites follow the site name.
+  const oldConf = existing.confPath || siteConfPath(agent, existing);
+  site.confPath = existing.importedFrom ? oldConf : siteConfPath(agent, site);
+  if (oldConf !== site.confPath) store.stageDelete(agent.id, oldConf);
+  store.writeSite(agent.id, site);
+  store.stageFile(agent.id, site.confPath, siteToNginxConf(site));
+  io.emit('files', { agentId: agent.id });
+  io.emit('agents');
   res.json(site);
 });
 
 app.delete('/api/agents/:id/sites/:siteId', requireAuth, (req, res) => {
-  const dir      = agentSitesDir(req.params.id);
-  const siteFile = path.join(dir, `${req.params.siteId}.json`);
-  if (!fs.existsSync(siteFile)) return res.status(404).json({ error: 'Site not found' });
-
-  const site = JSON.parse(fs.readFileSync(siteFile, 'utf8'));
-  fs.unlinkSync(siteFile);
-
-  // Remove generated config
-  const confFile = path.join(agentConfigDir(req.params.id), `site_${site.name.replace(/[^a-zA-Z0-9_-]/g,'_')}.conf`);
-  try { if (fs.existsSync(confFile)) fs.unlinkSync(confFile); } catch {}
-
+  const agent = requireAgent(req, res); if (!agent) return;
+  const site = store.readSite(agent.id, req.params.siteId);
+  if (!site) return res.status(404).json({ error: 'Site not found' });
+  store.deleteSite(agent.id, site.id);
+  if (!site.importedFrom || req.query.removeFile === 'true') {
+    store.stageDelete(agent.id, site.confPath || siteConfPath(agent, site));
+  }
+  io.emit('files', { agentId: agent.id });
+  io.emit('agents');
   res.json({ ok: true });
 });
 
 // Preview generated config without saving
 app.post('/api/agents/:id/sites/preview', requireAuth, (req, res) => {
-  const agent = readAgents().find(a => a.id === req.params.id);
-  if (!agent) return res.status(404).json({ error: 'Agent not found' });
+  const agent = requireAgent(req, res); if (!agent) return;
   try {
-    const conf = siteToNginxConf(req.body, agent);
-    res.json({ conf });
+    const site = resolveCertPaths(agent.id, { ...req.body });
+    res.json({ conf: siteToNginxConf(site), path: siteConfPath(agent, site) });
   } catch (err) {
     res.status(400).json({ error: err.message });
   }
 });
 
-// ---------------------------------------------------------------------------
-// Import conf.d files from the remote server into the Visual Builder
-// ---------------------------------------------------------------------------
-// Lightweight nginx conf parser — extracts the key fields we care about.
-function parseNginxConf(filename, raw) {
-  const text  = raw.replace(/#[^\n]*/g, '');   // strip comments
-  const lines = text.replace(/\r/g, '').split('\n').map(l => l.trim()).filter(Boolean);
-
-  // Helper: grab first match of a directive inside a block string
-  const directive = (block, name) => {
-    const m = block.match(new RegExp(`(?:^|\\n)\\s*${name}\\s+([^;{\\n]+);`));
-    return m ? m[1].trim() : null;
-  };
-
-  // Split into top-level upstream{} blocks and server{} blocks
-  const upstreamBlocks = [];
-  const serverBlocks   = [];
-
-  let depth = 0, blockStart = -1, blockType = null;
-  const joined = lines.join('\n');
-
-  for (let i = 0; i < joined.length; i++) {
-    const ch = joined[i];
-    if (ch === '{') {
-      if (depth === 0) {
-        // Grab the keyword before this {
-        const before = joined.slice(Math.max(0, i - 80), i).trim();
-        const typeMatch = before.match(/(upstream|server)\s*\S*\s*$/i);
-        blockType  = typeMatch ? typeMatch[1].toLowerCase() : 'unknown';
-        blockStart = i + 1;
-      }
-      depth++;
-    } else if (ch === '}') {
-      depth--;
-      if (depth === 0 && blockStart >= 0) {
-        const block = joined.slice(blockStart, i).trim();
-        if (blockType === 'upstream') upstreamBlocks.push(block);
-        else if (blockType === 'server') serverBlocks.push(block);
-        blockStart = -1; blockType = null;
-      }
-    }
-  }
-
-  const sites = [];
-
-  for (const sb of serverBlocks) {
-    // Listen port
-    const listenMatch = sb.match(/listen\s+([\d.]*:?(\d+))\s*([^;]*)?;/i);
-    const listenRaw   = listenMatch ? listenMatch[1] : '80';
-    const isSSL       = sb.includes('ssl') || /listen\s+[^;]*ssl/.test(sb);
-    const listenPort  = parseInt(listenRaw.replace(/.*:/, '')) || (isSSL ? 443 : 80);
-
-    // Skip pure HTTP→HTTPS redirects (return 301 https)
-    if (/return\s+301\s+https/.test(sb) && !isSSL) continue;
-
-    const serverName = directive(sb, 'server_name') || '';
-
-    // Detect type
-    let type       = 'proxy';
-    let upstream   = [];
-    let staticRoot = '';
-    let redirectTo = '';
-
-    const proxyPass  = directive(sb, 'proxy_pass');
-    const root       = directive(sb, 'root');
-    const returnDir  = directive(sb, 'return');
-
-    if (returnDir && /https?:\/\//.test(returnDir)) {
-      type = 'redirect';
-      redirectTo = returnDir.replace(/^3\d\d\s+/, '').trim();
-    } else if (proxyPass) {
-      type = 'proxy';
-      // proxyPass may be http://upstream_name or http://host:port
-      const dest = proxyPass.replace(/^https?:\/\//, '');
-      // Check if it references an upstream block
-      const upBlock = upstreamBlocks.find(ub => {
-        const nm = joined.slice(0, joined.indexOf(ub) - 1)
-          .split('\n').reverse().find(l => l.trim().startsWith('upstream'));
-        return nm && nm.includes(dest.split('/')[0]);
-      });
-      if (upBlock) {
-        upstream = [...upBlock.matchAll(/server\s+([^;]+);/g)].map(m => m[1].trim());
-      } else {
-        upstream = [dest.split('/')[0]];
-      }
-    } else if (root) {
-      type = 'static';
-      staticRoot = root;
-    }
-
-    // SSL cert paths
-    const certFile = directive(sb, 'ssl_certificate(?!_key)') ||
-                     (sb.match(/ssl_certificate\s+(?!_key)([^;]+);/) || [])[1]?.trim() || '';
-    const keyFile  = directive(sb, 'ssl_certificate_key') || '';
-    const hsts     = /Strict-Transport-Security/.test(sb);
-
-    // Load balance method
-    let lbMethod = 'round_robin';
-    const lbBlock = upstreamBlocks[0] || '';
-    if (/least_conn/.test(lbBlock))  lbMethod = 'least_conn';
-    if (/ip_hash/.test(lbBlock))     lbMethod = 'ip_hash';
-
-    // Proxy timeout
-    const timeoutMatch = sb.match(/proxy_read_timeout\s+(\d+)/);
-    const proxyTimeout = timeoutMatch ? parseInt(timeoutMatch[1]) : 60;
-
-    const siteName = serverName
-      ? serverName.split(/\s+/)[0].replace(/[^a-zA-Z0-9._-]/g, '')
-      : filename.replace(/\.conf$/, '');
-
-    sites.push({
-      id:             uuidv4(),
-      name:           siteName || filename.replace(/\.conf$/, ''),
-      type,
-      serverName,
-      listenPort,
-      upstream,
-      lbMethod,
-      staticRoot,
-      redirectTo,
-      ssl:            isSSL && !!(certFile || keyFile),
-      certId:         null,
-      certFile:       certFile.trim(),
-      keyFile:        keyFile.trim(),
-      hsts,
-      proxyTimeout,
-      proxyBuffering: true,
-      extraDirectives: '',
-      enabled:        true,
-      createdAt:      new Date().toISOString(),
-      updatedAt:      new Date().toISOString(),
-      importedFrom:   filename,
-    });
-  }
-
-  return sites;
-}
-
-app.post('/api/agents/:id/sites/import', requireAuth, async (req, res) => {
-  const agent = readAgents().find(a => a.id === req.params.id);
-  if (!agent) return res.status(404).json({ error: 'Agent not found' });
-
-  const sudo       = sudoPrefix(agent);
-  const confDir    = `${agent.nginxConfigPath}/conf.d`;
-
-  // List all .conf files in conf.d
-  const listResult = await sshExec(agent, `ls ${confDir}/*.conf 2>/dev/null`);
-  const confFiles  = listResult.output.trim().split('\n')
-    .map(f => f.trim()).filter(f => f.endsWith('.conf'));
+// Import conf.d files the agent reported into the Visual Builder
+app.post('/api/agents/:id/sites/import', requireAuth, (req, res) => {
+  const agent = requireAgent(req, res); if (!agent) return;
+  const dir = confDir(agent);
+  const st  = store.readState(agent.id);
+  const desired = store.desiredFiles(st);
+  const confFiles = Object.keys(desired).filter(f => path.posix.dirname(f) === dir && f.endsWith('.conf')).sort();
 
   if (!confFiles.length) {
-    return res.json({ imported: [], skipped: [], message: `No .conf files found in ${confDir}` });
+    return res.json({ imported: [], skipped: [], message: `No .conf files reported in ${dir} — is the agent connected?` });
   }
 
-  // Load existing sites so we can skip duplicates
-  const sitesDir = agentSitesDir(req.params.id);
-  const existing = fs.readdirSync(sitesDir)
-    .filter(f => f.endsWith('.json'))
-    .flatMap(f => {
-      try { return [JSON.parse(fs.readFileSync(path.join(sitesDir, f), 'utf8'))]; }
-      catch { return []; }
-    });
-
+  const existing = store.readSites(agent.id);
   const imported = [];
   const skipped  = [];
 
   for (const remotePath of confFiles) {
     const fname = path.basename(remotePath);
-
-    // Read the conf file content via SSH
-    const catResult = await sshExec(agent, `${sudo}cat ${remotePath}`);
-    if (catResult.code !== 0) {
-      skipped.push({ file: fname, reason: `Could not read: ${catResult.output.trim()}` });
+    if (existing.some(e => (e.confPath || '') === remotePath && !e.importedFrom)) {
+      skipped.push({ file: fname, reason: 'Managed by the Visual Builder' });
+      continue;
+    }
+    const content = readFileContent(st, remotePath);
+    if (typeof content !== 'string') {
+      skipped.push({ file: fname, reason: 'Contents not synced from the agent yet — run Sync' });
       continue;
     }
 
-    // Parse the conf into site definition(s)
     let sites;
-    try { sites = parseNginxConf(fname, catResult.output); }
+    try { sites = parseNginxConf(fname, content); }
     catch (err) {
       skipped.push({ file: fname, reason: `Parse error: ${err.message}` });
       continue;
     }
-
     if (!sites.length) {
       skipped.push({ file: fname, reason: 'No server blocks found (may be a redirect-only block)' });
       continue;
     }
 
     for (const site of sites) {
-      // Skip if a site with the same name + importedFrom is already stored
-      const dup = existing.find(e =>
-        e.importedFrom === fname && e.serverName === site.serverName
-      );
+      const dup = existing.find(e => e.importedFrom === fname && e.serverName === site.serverName);
       if (dup) {
         skipped.push({ file: fname, reason: `Already imported (${site.name})` });
         continue;
       }
-
-      // Write site JSON
-      const siteFile = path.join(sitesDir, `${site.id}.json`);
-      fs.writeFileSync(siteFile, JSON.stringify(site, null, 2));
-
-      // Also store a local copy of the raw conf (don't overwrite if it already exists)
-      const localConf = path.join(agentConfigDir(req.params.id), fname);
-      if (!fs.existsSync(localConf)) {
-        fs.writeFileSync(localConf, catResult.output, 'utf8');
-      }
-
+      site.confPath = remotePath;
+      store.writeSite(agent.id, site);
       imported.push(site);
-      existing.push(site);   // prevent double-import within the same request
+      existing.push(site);
     }
   }
 
@@ -987,227 +730,47 @@ app.post('/api/agents/:id/sites/import', requireAuth, async (req, res) => {
 });
 
 // ---------------------------------------------------------------------------
-// SSH operations — Socket.IO
+// Socket.IO — session-authenticated live log + operations
 // ---------------------------------------------------------------------------
+io.engine.use(sessionMiddleware);
+io.use((socket, next) => {
+  const s = socket.request.session;
+  if (s && s.authenticated) return next();
+  next(new Error('unauthorised'));
+});
+
+mp.on('log', (agentId, text) => io.emit('log', { agentId, text }));
+mp.on('agents', () => io.emit('agents'));
+mp.on('files', agentId => io.emit('files', { agentId }));
+
 io.on('connection', (socket) => {
-
-  socket.on('push', async ({ agentId, filename, token }) => {
-    if (!token) { socket.emit('done', { success: false, output: 'Not authenticated' }); return; }
-    const agents = readAgents();
-    const agent  = agents.find(a => a.id === agentId);
-    if (!agent)  { socket.emit('done', { success: false, output: 'Agent not found' }); return; }
-
-    const localPath = path.join(agentConfigDir(agentId), path.basename(filename));
-    if (!fs.existsSync(localPath)) { socket.emit('done', { success: false, output: 'Local config not found' }); return; }
-
-    const content    = fs.readFileSync(localPath, 'utf8');
-    const remotePath = `${agent.nginxConfigPath}/conf.d/${filename}`;
-    socket.emit('log', `📤 Pushing ${filename} → ${agent.host}:${remotePath}\n`);
-
-    const ssh = new NodeSSH();
-    try {
-      await ssh.connect(makeConnOpts(agent));
-      socket.emit('log', `✅ SSH connected to ${agent.host}\n`);
-
-      const sudo    = sudoPrefix(agent);
-      const escaped = content.replace(/\\/g, '\\\\').replace(/'/g, "'\\''");
-      const wRes    = await ssh.execCommand(`printf '%s' '${escaped}' | ${sudo}tee ${remotePath} > /dev/null && echo "Written OK"`);
-      if (wRes.code !== 0) {
-        socket.emit('log', `❌ Write failed: ${wRes.stderr}\n`);
-        ssh.dispose();
-        socket.emit('done', { success: false, output: wRes.stderr });
-        return;
-      }
-      socket.emit('log', `✅ File written to ${remotePath}\n`);
-
-      socket.emit('log', `🔍 Running nginx -t...\n`);
-      const tRes = await ssh.execCommand(`${sudo}nginx -t 2>&1`);
-      const tOut = tRes.stdout + tRes.stderr;
-      socket.emit('log', tOut + '\n');
-
-      if (tRes.code !== 0) {
-        socket.emit('log', `❌ nginx config test failed — NOT reloading\n`);
-        ssh.dispose();
-        socket.emit('done', { success: false, output: tOut });
-        return;
-      }
-
-      socket.emit('log', `🔄 Reloading nginx...\n`);
-      const rRes = await ssh.execCommand(`${sudo}nginx -s reload 2>&1`);
-      socket.emit('log', (rRes.stdout + rRes.stderr) + '\n');
-
-      if (rRes.code === 0) {
-        socket.emit('log', `✅ nginx reloaded successfully!\n`);
-        socket.emit('done', { success: true, output: tOut });
-      } else {
-        socket.emit('log', `❌ Reload failed\n`);
-        socket.emit('done', { success: false, output: rRes.stdout + rRes.stderr });
-      }
-      ssh.dispose();
-    } catch (err) {
-      socket.emit('log', `❌ Error: ${err.message}\n`);
-      socket.emit('done', { success: false, output: err.message });
-      try { ssh.dispose(); } catch {}
-    }
+  const authed = () => socket.request.session && socket.request.session.authenticated;
+  const op = (name, fn) => socket.on(name, async ({ agentId } = {}) => {
+    if (!authed()) { socket.emit('done', { op: name, agentId, success: false, output: 'Not authenticated' }); return; }
+    const agent = store.findAgent(agentId);
+    if (!agent) { socket.emit('done', { op: name, agentId, success: false, output: 'Server not found' }); return; }
+    const result = await fn(agent);
+    socket.emit('done', { op: name, agentId, ...result });
   });
 
-  socket.on('validate', async ({ agentId, token }) => {
-    if (!token) { socket.emit('done', { success: false, output: 'Not authenticated' }); return; }
-    const agent = readAgents().find(a => a.id === agentId);
-    if (!agent)  { socket.emit('done', { success: false, output: 'Agent not found' }); return; }
-    socket.emit('log', `🔍 Validating nginx config on ${agent.host}...\n`);
-    socket.emit('done', await sshExec(agent, `${sudoPrefix(agent)}nginx -t 2>&1`, l => socket.emit('log', l)));
+  op('apply', agent => mp.configApply(agent.id));
+  op('sync',  agent => mp.configUpload(agent.id));
+  op('status', async agent => {
+    if (!mp.isOnline(agent.id)) return { success: false, output: 'Agent is not connected' };
+    mp.requestHealth(agent.id);
+    await new Promise(r => setTimeout(r, 2000));
+    const a = store.findAgent(agent.id);
+    const health = mp.health.get(agent.id) || [];
+    const lines = [
+      `Host:          ${a.hostname || '—'} ${a.os ? `(${a.os})` : ''}`,
+      `NGINX Agent:   ${a.agentVersion || '—'}`,
+      `nginx:         ${a.nginxVersion || '—'}  ${a.configPath || ''}`,
+      `Last seen:     ${a.lastSeen || '—'}`,
+      ...health.map(h => `Health:        ${h.status}${h.description ? ` — ${h.description}` : ''}`),
+    ];
+    const healthy = health.length > 0 && health.every(h => h.status === 'healthy');
+    return { success: healthy, output: lines.join('\n') + '\n', healthy };
   });
-
-  socket.on('reload', async ({ agentId, token }) => {
-    if (!token) { socket.emit('done', { success: false, output: 'Not authenticated' }); return; }
-    const agent = readAgents().find(a => a.id === agentId);
-    if (!agent)  { socket.emit('done', { success: false, output: 'Agent not found' }); return; }
-    socket.emit('log', `🔄 Reloading nginx on ${agent.host}...\n`);
-    socket.emit('done', await sshExec(agent, `${sudoPrefix(agent)}nginx -s reload 2>&1`, l => socket.emit('log', l)));
-  });
-
-  socket.on('sync', async ({ agentId, token }) => {
-    if (!token) { socket.emit('done', { success: false, output: 'Not authenticated' }); return; }
-    const agent = readAgents().find(a => a.id === agentId);
-    if (!agent)  { socket.emit('done', { success: false, output: 'Agent not found' }); return; }
-
-    socket.emit('log', `🔄 Syncing configs from ${agent.host}...\n`);
-    const ssh = new NodeSSH();
-    try {
-      await ssh.connect(makeConnOpts(agent));
-      socket.emit('log', `✅ SSH connected\n`);
-
-      const sudo    = sudoPrefix(agent);
-      const listRes = await ssh.execCommand(
-        `ls ${agent.nginxConfigPath}/conf.d/*.conf ${agent.nginxConfigPath}/conf.d/*.nginx ${agent.nginxConfigPath}/*.conf 2>/dev/null`
-      );
-      const files = listRes.stdout.trim().split('\n').filter(f => f.trim() && !f.includes('No such'));
-
-      if (!files.length) {
-        socket.emit('log', `ℹ️  No .conf files found — pulling nginx.conf\n`);
-        const mRes = await ssh.execCommand(`${sudo}cat ${agent.nginxConfigPath}/nginx.conf 2>/dev/null`);
-        if (mRes.code === 0) {
-          fs.writeFileSync(path.join(agentConfigDir(agentId), 'nginx.conf'), mRes.stdout, 'utf8');
-          socket.emit('log', `✅ Synced nginx.conf\n`);
-        }
-      } else {
-        const dir = agentConfigDir(agentId);
-        for (const fp of files) {
-          const fname = path.basename(fp);
-          const cRes  = await ssh.execCommand(`${sudo}cat ${fp}`);
-          if (cRes.code === 0) {
-            fs.writeFileSync(path.join(dir, fname), cRes.stdout, 'utf8');
-            socket.emit('log', `✅ Synced ${fname}\n`);
-          } else {
-            socket.emit('log', `⚠️  Could not read ${fname}: ${cRes.stderr}\n`);
-          }
-        }
-      }
-
-      ssh.dispose();
-      socket.emit('done', { success: true, output: 'Sync complete' });
-    } catch (err) {
-      socket.emit('log', `❌ Error: ${err.message}\n`);
-      socket.emit('done', { success: false, output: err.message });
-      try { ssh.dispose(); } catch {}
-    }
-  });
-
-  socket.on('status', async ({ agentId, token }) => {
-    if (!token) { socket.emit('done', { success: false, output: 'Not authenticated' }); return; }
-    const agent = readAgents().find(a => a.id === agentId);
-    if (!agent)  { socket.emit('done', { success: false, output: 'Agent not found' }); return; }
-    const s = sudoPrefix(agent);
-    socket.emit('done', await sshExec(
-      agent,
-      `${s}systemctl is-active nginx && ${s}nginx -v 2>&1 && ${s}systemctl status nginx --no-pager -l 2>&1 | head -20`,
-      l => socket.emit('log', l)
-    ));
-  });
-
-  socket.on('pushCert', async ({ agentId, certId, token }) => {
-    if (!token) { socket.emit('done', { success: false, output: 'Not authenticated' }); return; }
-    const agent = readAgents().find(a => a.id === agentId);
-    if (!agent)  { socket.emit('done', { success: false, output: 'Agent not found' }); return; }
-
-    const dir      = agentCertDir(agentId);
-    const metaFile = path.join(dir, 'certs.json');
-    let certs = [];
-    try { certs = JSON.parse(fs.readFileSync(metaFile, 'utf8')); } catch {}
-    const cert = certs.find(c => c.id === certId);
-    if (!cert)             { socket.emit('done', { success: false, output: 'Cert not found' }); return; }
-    if (!cert.localCert)   { socket.emit('done', { success: false, output: 'No cert file uploaded' }); return; }
-    if (!cert.remoteCertPath || !cert.remoteKeyPath) {
-      socket.emit('done', { success: false, output: 'Remote cert/key paths not set' });
-      return;
-    }
-
-    const ssh  = new NodeSSH();
-    const sudo = sudoPrefix(agent);
-    try {
-      await ssh.connect(makeConnOpts(agent));
-      socket.emit('log', `✅ SSH connected\n`);
-
-      const ensureDir = async p => {
-        await ssh.execCommand(`${sudo}mkdir -p ${path.dirname(p)} && ${sudo}chmod 755 ${path.dirname(p)}`);
-      };
-
-      socket.emit('log', `📤 Uploading certificate...\n`);
-      await ensureDir(cert.remoteCertPath);
-      const certContent = fs.readFileSync(cert.localCert, 'utf8');
-      const r1 = await ssh.execCommand(
-        `${sudo}tee ${cert.remoteCertPath} > /dev/null << 'PEMEOF'\n${certContent}\nPEMEOF\necho written`
-      );
-      socket.emit('log', r1.code === 0 ? `✅ Certificate written to ${cert.remoteCertPath}\n` : `❌ ${r1.stderr}\n`);
-
-      socket.emit('log', `📤 Uploading private key...\n`);
-      await ensureDir(cert.remoteKeyPath);
-      const keyContent = fs.readFileSync(cert.localKey, 'utf8');
-      const r2 = await ssh.execCommand(
-        `${sudo}tee ${cert.remoteKeyPath} > /dev/null << 'PEMEOF'\n${keyContent}\nPEMEOF\n${sudo}chmod 600 ${cert.remoteKeyPath} && echo written`
-      );
-      socket.emit('log', r2.code === 0 ? `✅ Key written to ${cert.remoteKeyPath} (chmod 600)\n` : `❌ ${r2.stderr}\n`);
-
-      if (cert.localChain && cert.remoteChainPath) {
-        socket.emit('log', `📤 Uploading chain...\n`);
-        await ensureDir(cert.remoteChainPath);
-        const chainContent = fs.readFileSync(cert.localChain, 'utf8');
-        const r3 = await ssh.execCommand(
-          `${sudo}tee ${cert.remoteChainPath} > /dev/null << 'PEMEOF'\n${chainContent}\nPEMEOF\necho written`
-        );
-        socket.emit('log', r3.code === 0 ? `✅ Chain written to ${cert.remoteChainPath}\n` : `❌ ${r3.stderr}\n`);
-      }
-
-      ssh.dispose();
-      socket.emit('done', { success: r1.code === 0 && r2.code === 0, output: 'Cert push complete' });
-    } catch (err) {
-      socket.emit('log', `❌ Error: ${err.message}\n`);
-      socket.emit('done', { success: false, output: err.message });
-      try { ssh.dispose(); } catch {}
-    }
-  });
-});
-
-// ---------------------------------------------------------------------------
-// REST fallbacks
-// ---------------------------------------------------------------------------
-app.post('/api/agents/:id/validate', requireAuth, async (req, res) => {
-  const agent = readAgents().find(a => a.id === req.params.id);
-  if (!agent) return res.status(404).json({ error: 'Agent not found' });
-  res.json(await sshExec(agent, `${sudoPrefix(agent)}nginx -t 2>&1`));
-});
-
-app.post('/api/agents/:id/reload', requireAuth, async (req, res) => {
-  const agent = readAgents().find(a => a.id === req.params.id);
-  if (!agent) return res.status(404).json({ error: 'Agent not found' });
-  res.json(await sshExec(agent, `${sudoPrefix(agent)}nginx -s reload 2>&1`));
-});
-
-app.get('/api/agents/:id/status', requireAuth, async (req, res) => {
-  const agent = readAgents().find(a => a.id === req.params.id);
-  if (!agent) return res.status(404).json({ error: 'Agent not found' });
-  res.json(await sshExec(agent, `${sudoPrefix(agent)}systemctl is-active nginx 2>&1 && ${sudoPrefix(agent)}nginx -v 2>&1`));
 });
 
 // ---------------------------------------------------------------------------
@@ -1217,6 +780,13 @@ app.get('*', (req, res) => {
   res.sendFile(path.join(__dirname, 'public', 'index.html'));
 });
 
+mp.start().catch(err => {
+  console.error('[nginx-manager] Failed to start agent gRPC listener:', err.message);
+  process.exit(1);
+});
+
 server.listen(PORT, '0.0.0.0', () => {
   console.log(`nginx-manager listening on http://0.0.0.0:${PORT}`);
 });
+
+module.exports = { app, server, mp };

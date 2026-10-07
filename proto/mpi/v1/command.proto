@@ -1,0 +1,455 @@
+// Copyright (c) F5, Inc.
+//
+// This source code is licensed under the Apache License, Version 2.0 license found in the
+// LICENSE file in the root directory of this source tree.
+
+// These proto definitions follow https://protobuf.dev/programming-guides/style/
+// and recommendations outlined in https://static.sched.com/hosted_files/kccncna17/ad/2017%20CloudNativeCon%20-%20Mod%20gRPC%20Services.pdf
+syntax = "proto3";
+package mpi.v1;
+
+option go_package = "mpi/v1";
+
+import "mpi/v1/common.proto";
+import "mpi/v1/files.proto";
+import "google/protobuf/struct.proto";
+
+// A service outlining the command and control options for a Data Plane Client
+// All operations are written from a client perspective
+// The RPC calls generally flow Client -> Server, except for Subscribe which contains a bidirectional stream
+// The ManagementPlaneRequest sent in the Subscribe stream triggers one or more client actions.
+// Messages provided by the Management Plane must be a FIFO ordered queue. Messages in the queue must have a monotonically-increasing integer index. 
+// The indexes do not need to be sequential. The index must be a 64-bit signed integer.
+// The index must not reset for the entire lifetime of a unique Agent (i.e. the index does not reset to 0 only because of a temporary disconnection or new session). 
+// Messages must not be removed from the Management Plane queue until Ack’d by the Agent. 
+// Messages sent but not yet Ack’d must be kept in an “in-flight” buffer as they may need to be retried.
+service CommandService {
+    // Connects NGINX Agent to the Management Plane agnostic of instance data
+    rpc CreateConnection(CreateConnectionRequest) returns (CreateConnectionResponse) {}
+    // Reports on instances and their configurations
+    rpc UpdateDataPlaneStatus(UpdateDataPlaneStatusRequest) returns (UpdateDataPlaneStatusResponse) {}
+    // Reports on instance health
+    rpc UpdateDataPlaneHealth(UpdateDataPlaneHealthRequest) returns (UpdateDataPlaneHealthResponse) {}
+    // A decoupled communication mechanism between the data plane and management plane.
+    // buf:lint:ignore RPC_RESPONSE_STANDARD_NAME
+    // buf:lint:ignore RPC_REQUEST_STANDARD_NAME
+    rpc Subscribe(stream DataPlaneResponse) returns (stream ManagementPlaneRequest) {}
+}
+
+// The connection request is an initial handshake to establish a connection, sending NGINX Agent instance information
+message CreateConnectionRequest {
+    // Meta-information associated with a message
+    mpi.v1.MessageMeta message_meta = 1;
+    // Instance and infrastructure information associated with the NGINX Agent
+    Resource resource = 2;
+}
+
+// A representation of instances and runtime resource information
+message Resource {
+    // A resource identifier
+    string resource_id = 1;
+    // A list of instances associated with this resource
+    repeated Instance instances = 2;
+    // Runtime information of where the instances reside. Host or container based
+    oneof info {
+        // If running on bare-metal, provides additional information
+        HostInfo host_info = 3;
+        // If running in a containerized environment, provides additional information
+        ContainerInfo container_info = 4;
+    }
+}
+
+// Represents the host system information
+message HostInfo {
+    // The host identifier
+    string host_id = 1;
+    // The name of the host
+    string hostname = 2;
+    // Release information of the host
+    ReleaseInfo release_info = 3;
+}
+
+// Release information of the host
+message ReleaseInfo {
+    // OS type (e.g. freebsd, linux, etc)
+    string codename = 1;
+    // OS name (e.g. ubuntu, linuxmint, etc)
+    string id = 2;
+    // OS family (e.g. debian, rhel)
+    string name = 3;
+    // Version of the OS kernel
+    string version_id = 4;
+    // Version of the OS
+    string version = 5;
+}
+
+// Container information
+message ContainerInfo {
+    // The identifier of the container
+    string container_id = 1;
+    // The name of the host
+    string hostname = 2;
+    // Release information of the container
+    ReleaseInfo release_info = 3;
+}
+
+// A response to a CreateConnectionRequest
+message CreateConnectionResponse {
+    // The success or failure of the CreateConnectionRequest
+    mpi.v1.CommandResponse response = 1;
+    // The recommendation NGINX Agent configurations provided by the ManagementPlane
+    AgentConfig agent_config = 2;
+}
+
+// Report on the status of the Data Plane
+message UpdateDataPlaneStatusRequest {
+    // Meta-information associated with a message
+    mpi.v1.MessageMeta message_meta = 1;
+    // the representation of a data plane
+    Resource resource = 2;
+}
+
+// Respond to a UpdateDataPlaneStatusRequest - intentionally empty
+message UpdateDataPlaneStatusResponse {}
+
+message UpdateAgentConfigRequest {
+    // Meta-information associated with a message
+    mpi.v1.MessageMeta message_meta = 1;
+    // The NGINX Agent configuration to update
+    AgentConfig agent_config = 2;
+}
+
+message InstanceHealth {
+    // Health status enum
+    enum InstanceHealthStatus {
+        // Unspecified status
+        INSTANCE_HEALTH_STATUS_UNSPECIFIED = 0;
+        // Healthy status
+        INSTANCE_HEALTH_STATUS_HEALTHY = 1;
+        // Unhealthy status
+        INSTANCE_HEALTH_STATUS_UNHEALTHY = 2;
+        // Degraded status
+        INSTANCE_HEALTH_STATUS_DEGRADED = 3;
+    }
+    string instance_id = 1;
+    // Health status
+    InstanceHealthStatus instance_health_status = 2;
+    // Provides a human readable context around why a health status is a particular state
+    string description = 3;
+}
+
+// Health report of a set of instances
+message UpdateDataPlaneHealthRequest {
+    // Meta-information associated with a message
+    mpi.v1.MessageMeta message_meta = 1;
+    // Health report of a set of instances
+    repeated InstanceHealth instance_healths = 2;
+}
+
+// Response to a UpdateDataPlaneHealthRequest - intentionally empty
+message UpdateDataPlaneHealthResponse {}
+
+// Reports the status of an associated command. This may be in response to a ManagementPlaneRequest
+message DataPlaneResponse {
+    enum RequestType {
+        UNSPECIFIED_REQUEST = 0; 
+        CONFIG_APPLY_REQUEST = 1; 
+        CONFIG_UPLOAD_REQUEST = 2;
+        HEALTH_REQUEST = 3; 
+        STATUS_REQUEST = 4;
+        API_ACTION_REQUEST = 5; 
+        COMMAND_STATUS_REQUEST = 6; 
+        UPDATE_AGENT_CONFIG_REQUEST = 7;
+    }
+
+    // Meta-information associated with a message
+    mpi.v1.MessageMeta message_meta = 1;
+    // The command response with the associated request
+    mpi.v1.CommandResponse command_response = 2;
+    // The instance identifier, if applicable, for this response
+    string instance_id = 3;
+    // The management plane request type that is being responded to
+    RequestType request_type = 4;
+}
+
+// A Management Plane request for information, triggers an associated rpc on the Data Plane
+message ManagementPlaneRequest {
+    // Meta-information associated with a message
+    mpi.v1.MessageMeta message_meta = 1;
+    oneof request {
+        // triggers a DataPlaneStatus rpc
+        StatusRequest status_request = 2;
+        // triggers a DataPlaneHealth rpc
+        HealthRequest health_request = 3;
+        // triggers a rpc GetFile(FileRequest) for overview list, 
+        // if overview is missing, triggers a rpc GetOverview(ConfigVersion) first
+        ConfigApplyRequest config_apply_request = 5;
+        // triggers a series of rpc UpdateFile(File) for that instances
+        ConfigUploadRequest config_upload_request = 6;
+        // triggers a DataPlaneResponse with a command_response for a particular action
+        APIActionRequest action_request = 7;
+        // triggers a DataPlaneResponse with a command_response for a particular correlation_id
+        CommandStatusRequest command_status_request = 8;
+        // triggers an update to the NGINX Agent configuration
+        UpdateAgentConfigRequest update_agent_config_request = 9;
+    }
+}
+
+// Additional information associated with a StatusRequest
+message StatusRequest {}
+
+// Additional information associated with a HealthRequest
+message HealthRequest {}
+
+// Additional information associated with a ConfigApplyRequest
+message ConfigApplyRequest {
+    // set of files related to the request
+    mpi.v1.FileOverview overview = 1;
+}
+
+// Additional information associated with a ConfigUploadRequest
+message ConfigUploadRequest {
+    // set of files related to the request
+    mpi.v1.FileOverview overview = 1;
+}
+
+// Perform an associated API action on an instance
+message APIActionRequest {
+    // the identifier associated with the instance
+    string instance_id = 1;
+    // types of API actions possible
+    oneof action {
+        NGINXPlusAction nginx_plus_action = 2;
+    }
+}
+
+// Perform an action using the NGINX Plus API on an instance
+message NGINXPlusAction {
+    // types of actions possible with NGINX Plus API
+    oneof action {
+        UpdateHTTPUpstreamServers update_http_upstream_servers = 1;
+        GetHTTPUpstreamServers get_http_upstream_servers = 2;
+        UpdateStreamServers update_stream_servers = 3;
+        GetUpstreams get_upstreams = 4;
+        GetStreamUpstreams get_stream_upstreams = 5;
+    }
+}
+
+// Update HTTP Upstream Servers for an instance 
+message UpdateHTTPUpstreamServers {
+    // the name of the upstream to update
+    string http_upstream_name = 1;
+    // a list of upstream servers 
+    repeated google.protobuf.Struct servers = 2;
+}
+
+// Get HTTP Upstream Servers for an instance 
+message GetHTTPUpstreamServers {
+    // the name of the upstream
+    string http_upstream_name = 1;
+}
+
+// Update Upstream Stream Servers for an instance 
+message UpdateStreamServers {
+    // the name of the upstream stream
+    string  upstream_stream_name = 1;
+    // a list of upstream stream servers
+    repeated google.protobuf.Struct servers = 2;
+}
+
+// Get Upstreams for an instance 
+message GetUpstreams {
+}
+
+// Get Stream Upstream Servers for an instance 
+message GetStreamUpstreams {
+}
+
+// Request an update on a particular command
+message CommandStatusRequest {}
+
+// This represents an instance being reported on
+message Instance {
+    // Meta-information associated with an instance
+    InstanceMeta instance_meta = 1;
+    // Read and write configuration associated with an instance that can be modified via this definition
+    InstanceConfig instance_config = 2;
+    // Read-only meta data associated with the instance running in it's environment
+    InstanceRuntime instance_runtime = 3;
+}
+
+// Meta-information relating to the reported instance
+message InstanceMeta {
+    // the identifier associated with the instance
+    string instance_id = 1;
+    // the types of instances possible
+    enum InstanceType {
+        // Unspecified instance type
+        INSTANCE_TYPE_UNSPECIFIED = 0;
+        // NGINX Agent
+        INSTANCE_TYPE_AGENT = 1;
+        // NGINX
+        INSTANCE_TYPE_NGINX = 2;
+        // NGINX Plus
+        INSTANCE_TYPE_NGINX_PLUS = 3;
+        // NGINX Unit
+        INSTANCE_TYPE_UNIT = 4;
+        // NGINX App Protect
+        INSTANCE_TYPE_NGINX_APP_PROTECT = 5;
+    }
+    // the types of instances possible
+    InstanceType instance_type = 2;
+    // the version of the instance
+    string version = 3;
+}
+
+// Instance Configuration options
+message InstanceConfig {
+    // provided actions associated with a particular instance. These are runtime based and provided by a particular version of the NGINX Agent
+    repeated InstanceAction actions = 1;
+    oneof config {
+        // NGINX Agent runtime configuration settings
+        AgentConfig agent_config = 2;
+    }
+}
+
+message InstanceRuntime {
+    // the process identifier
+    int32 process_id = 1;
+    // the binary path location
+    string binary_path = 2;
+    // the config path location
+    string config_path = 3;
+    // more detailed runtime objects
+    oneof details {
+        // NGINX runtime configuration settings like stub_status, usually read from the NGINX config or NGINX process
+        NGINXRuntimeInfo nginx_runtime_info = 4;
+        // NGINX Plus runtime configuration settings like api value, usually read from the NGINX config, NGINX process or NGINX Plus API
+        NGINXPlusRuntimeInfo nginx_plus_runtime_info = 5;
+        // NGINX App Protect runtime information
+        NGINXAppProtectRuntimeInfo nginx_app_protect_runtime_info = 7;
+    }
+    // List of worker processes
+    repeated InstanceChild instance_children = 6;
+}
+
+message InstanceChild {
+    // the process identifier
+    int32 process_id = 1;
+}
+
+// A set of runtime NGINX OSS settings
+message NGINXRuntimeInfo {
+    // the stub status API details
+    APIDetails stub_status = 1;
+    // a list of access_logs
+    repeated string access_logs = 2;
+    // a list of error_logs
+    repeated string error_logs = 3;
+    // List of NGINX potentially loadable modules (installed but not loaded).
+    repeated string loadable_modules = 4;
+    // List of NGINX dynamic modules.
+    repeated string dynamic_modules = 5;
+}
+
+// A set of runtime NGINX Plus settings
+message NGINXPlusRuntimeInfo {
+    // the stub status API details
+    APIDetails stub_status = 1;
+    // a list of access_logs
+    repeated string access_logs = 2;
+    // a list of error_logs
+    repeated string error_logs = 3;
+    // List of NGINX potentially loadable modules (installed but not loaded).
+    repeated string loadable_modules = 4;
+    // List of NGINX dynamic modules.
+    repeated string dynamic_modules = 5;
+    // the plus API details
+    APIDetails plus_api = 6;
+}
+
+message APIDetails {
+    // the API location directive
+    string location = 1;
+    // the API listen directive
+    string listen =  2;
+    // the API CA file path
+    string Ca = 3;
+}
+
+// A set of runtime NGINX App Protect settings
+message NGINXAppProtectRuntimeInfo {
+    // NGINX App Protect Release 
+    string release = 1;
+    // Attack signature version
+    string attack_signature_version = 2;
+    // Threat campaign version
+    string threat_campaign_version = 3;
+    // Enforcer engine version
+    string enforcer_engine_version = 4;
+}
+
+// A set of actions that can be performed on an instance
+message InstanceAction {}
+
+// This contains a series of NGINX Agent configurations
+message AgentConfig {
+    // Command server settings
+    CommandServer command = 1;
+    // Metrics server settings
+    MetricsServer metrics = 2;
+    // File server settings
+    FileServer file = 3;
+    // A series of key/value pairs to add more data to the NGINX Agent instance
+    repeated google.protobuf.Struct labels = 4;
+    // A list of features that the NGINX Agent has
+    repeated string features = 5;
+    // Message buffer size, maximum not acknowledged messages from the subscribe perspective
+    string message_buffer_size = 6;
+    // Auxiliary Command server settings
+    AuxiliaryCommandServer auxiliary_command = 7;
+    // Log settings
+    Log log = 8;
+}
+
+// The log settings associated with NGINX Agent
+message Log {
+    LogLevel log_level = 1;
+    enum LogLevel {
+        // Info log level
+        LOG_LEVEL_INFO = 0;
+        // Error log level
+        LOG_LEVEL_ERROR = 1;
+        // Warning log level
+        LOG_LEVEL_WARN = 2;
+        // Debug log level
+        LOG_LEVEL_DEBUG = 3;
+    }
+    string log_path = 2;
+}
+
+// The command server settings, associated with messaging from an external source
+message CommandServer {
+    // Server configuration (e.g., host, port, type)
+    mpi.v1.ServerSettings server = 1;
+    // Authentication configuration (e.g., token)
+    mpi.v1.AuthSettings auth = 2;
+    // TLS configuration for secure communication
+    mpi.v1.TLSSettings tls = 3;
+}
+
+// The auxiliary server settings, associated with messaging from an external source
+message AuxiliaryCommandServer {
+    // Server configuration (e.g., host, port, type)
+    mpi.v1.ServerSettings server = 1;
+    // Authentication configuration (e.g., token)
+    mpi.v1.AuthSettings auth = 2;
+    // TLS configuration for secure communication
+    mpi.v1.TLSSettings tls = 3;
+}
+
+// The metrics settings associated with origins (sources) of the metrics and destinations (exporter)
+message MetricsServer {}
+
+// The file settings associated with file server for configurations
+message FileServer {}

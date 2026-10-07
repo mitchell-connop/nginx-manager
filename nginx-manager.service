@@ -1,5 +1,5 @@
 [Unit]
-Description=Nginx Manager — Web GUI for nginx config management
+Description=Nginx Manager — Web GUI + NGINX Agent management plane
 After=network-online.target
 Wants=network-online.target
 
@@ -13,6 +13,14 @@ Restart=always
 RestartSec=5
 StandardOutput=journal
 StandardError=journal
+
+# Hardening — the manager only needs to write its own data directory
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+ReadWritePaths=/opt/nginx-manager/data
+UMask=0077
 
 [Install]
 WantedBy=multi-user.target
