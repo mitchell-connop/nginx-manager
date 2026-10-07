@@ -89,14 +89,21 @@ test('agent lifecycle: auth, file sync, config apply, rollback', async (t) => {
   // ── initial overview: manager asks for both files, agent uploads them ─────
   const nginxConf = Buffer.from('events {}\nhttp { include /etc/nginx/conf.d/*.conf; }\n');
   const siteConf  = Buffer.from('server { listen 80; server_name a.example; }\n');
-  const overview = [protoFile('/etc/nginx/nginx.conf', nginxConf), protoFile('/etc/nginx/conf.d/a.conf', siteConf)];
+  const certPem   = Buffer.from('-----BEGIN CERTIFICATE-----\nMIIfake\n-----END CERTIFICATE-----\n');
+  const certFile  = protoFile('/etc/nginx/ssl/a.pem', certPem);
+  certFile.fileMeta.certificateMeta = {
+    subject: { commonName: 'a.example' }, sans: { dnsNames: ['a.example'] },
+    dates: { notBefore: '1700000000', notAfter: '1900000000' },
+  };
+  const overview = [protoFile('/etc/nginx/nginx.conf', nginxConf), protoFile('/etc/nginx/conf.d/a.conf', siteConf), certFile];
   const corr = crypto.randomUUID();
   const ov1 = await files.call('updateOverview', {
     messageMeta: meta(corr),
     overview: { files: overview, configVersion: { instanceId: INSTANCE, version: 'x' }, configPath: '/etc/nginx/nginx.conf' },
   });
   assert.deepEqual(ov1.overview.files.map(f => f.fileMeta.name).sort(),
-    ['/etc/nginx/conf.d/a.conf', '/etc/nginx/nginx.conf']);
+    ['/etc/nginx/conf.d/a.conf', '/etc/nginx/nginx.conf', '/etc/nginx/ssl/a.pem']);
+  await files.call('updateFile', { file: { fileMeta: certFile.fileMeta }, contents: { contents: certPem }, messageMeta: meta(corr) });
 
   await files.call('updateFile', { file: overview[0], contents: { contents: nginxConf }, messageMeta: meta(corr) });
   // second file via the chunked stream API
@@ -112,7 +119,10 @@ test('agent lifecycle: auth, file sync, config apply, rollback', async (t) => {
     overview: { files: ov1.overview.files, configVersion: { instanceId: INSTANCE, version: 'x' } },
   });
   assert.equal(ov2.overview.files.length, 0, 'everything synced');
-  assert.equal(Object.keys(store.readState(agentId).live).length, 2, 'partial follow-up overview merged, not replaced');
+  assert.equal(Object.keys(store.readState(agentId).live).length, 3, 'partial follow-up overview merged, not replaced');
+  const certMeta = store.readState(agentId).live['/etc/nginx/ssl/a.pem'].certificateMeta;
+  assert.equal(certMeta && certMeta.subject, 'a.example', 'cert metadata survives the follow-up overview');
+  assert.equal(certMeta.notAfter, new Date(1900000000 * 1000).toISOString());
 
   // ── stage edits and apply ─────────────────────────────────────────────────
   const siteConf2 = Buffer.from('server { listen 80; server_name a.example b.example; }\n');
@@ -124,6 +134,7 @@ test('agent lifecycle: auth, file sync, config apply, rollback', async (t) => {
   const req = await next(m => m.request === 'configApplyRequest');
   const sent = Object.fromEntries(req.configApplyRequest.overview.files.map(f => [f.fileMeta.name, f.fileMeta.hash]));
   assert.deepEqual(sent, {
+    '/etc/nginx/ssl/a.pem': sha(certPem),
     '/etc/nginx/nginx.conf': sha(nginxConf),
     '/etc/nginx/conf.d/a.conf': sha(siteConf2),
     '/etc/nginx/conf.d/new.conf': sha(newConf),

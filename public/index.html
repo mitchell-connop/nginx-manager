@@ -372,7 +372,6 @@
           <div class="section-header">
             <span class="section-title">Sites</span>
             <div style="display:flex;gap:8px">
-              <button class="btn-secondary btn-sm" onclick="importSitesFromServer()" id="btn-import-sites">⬇ Import from Server</button>
               <button class="btn-primary btn-sm"   onclick="openSiteModal()">＋ Add Site</button>
             </div>
           </div>
@@ -384,8 +383,6 @@
           <div class="section-header">
             <span class="section-title">Certificates</span>
             <div style="display:flex;gap:8px">
-              <button class="btn-secondary btn-sm" onclick="scanCerts()">🔍 Scan Server</button>
-              <button class="btn-purple btn-sm"    onclick="openAddRemoteCert()">🔗 Register Remote</button>
               <button class="btn-primary btn-sm"   onclick="openUploadCert()">⬆ Upload Cert</button>
             </div>
           </div>
@@ -580,7 +577,7 @@
             <select id="s-certid" onchange="onCertPick(); previewConf()">
               <option value="">— Manual path entry —</option>
             </select>
-            <div class="form-hint">Choose a cert from the Certificates store, or enter paths manually below.</div>
+            <div class="form-hint">Choose a certificate this server already uses (or one you uploaded), or enter paths manually below.</div>
           </div>
 
           <div id="cert-manual-paths">
@@ -676,35 +673,6 @@
   </div>
 </div>
 
-<!-- ─── REGISTER REMOTE CERT MODAL ─── -->
-<div class="modal-backdrop" id="remote-cert-modal">
-  <div class="modal">
-    <h3>🔗 Register Existing Remote Certificate</h3>
-    <p style="font-size:.85rem;color:var(--text-dim);margin-bottom:20px">The cert already exists on the nginx server — just tell nginx-manager where it is so it can be selected in the Site Builder.</p>
-    <div class="form-group"><label>Label <span class="req">*</span></label><input type="text" id="rc-label" placeholder="example.com (Let's Encrypt)" /></div>
-    <div class="form-row">
-      <div class="form-group"><label>Remote Cert Path <span class="req">*</span></label><input type="text" id="rc-cert" placeholder="/etc/letsencrypt/live/example.com/fullchain.pem" /></div>
-      <div class="form-group"><label>Remote Key Path <span class="req">*</span></label><input type="text" id="rc-key" placeholder="/etc/letsencrypt/live/example.com/privkey.pem" /></div>
-    </div>
-    <div class="modal-actions">
-      <button class="btn-secondary" onclick="document.getElementById('remote-cert-modal').classList.remove('open')">Cancel</button>
-      <button class="btn-primary" onclick="saveRemoteCert()">🔗 Register</button>
-    </div>
-  </div>
-</div>
-
-<!-- ─── SCAN RESULTS MODAL ─── -->
-<div class="modal-backdrop" id="scan-modal">
-  <div class="modal modal-wide">
-    <h3>🔍 Certificate Scan Results</h3>
-    <p style="font-size:.85rem;color:var(--text-dim);margin-bottom:20px">Certificate files reported by the agent (those referenced by nginx config). Click a suggestion to register it.</p>
-    <div id="scan-results"></div>
-    <div class="modal-actions">
-      <button class="btn-secondary" onclick="document.getElementById('scan-modal').classList.remove('open')">Close</button>
-    </div>
-  </div>
-</div>
-
 <!-- ─── NEW CONFIG MODAL ─── -->
 <div class="modal-backdrop" id="new-config-modal">
   <div class="modal">
@@ -776,7 +744,7 @@ function initSocket() {
   });
   S.socket.on('agents', debounce(loadAgents, 300));
   S.socket.on('files', debounce(({ agentId } = {}) => {
-    if (agentId === S.currentAgentId) { loadConfigs(); loadCerts(); }
+    if (agentId === S.currentAgentId) { loadConfigs(); loadCerts(); loadSites(); }
   }, 300));
 }
 
@@ -1164,8 +1132,11 @@ function openAddGroup() {
 // ─── SITES ────────────────────────────────────────────
 async function loadSites() {
   if (!S.currentAgentId) return;
-  S.sites = await apiFetch(`/api/agents/${S.currentAgentId}/sites`) || [];
-  document.getElementById('stat-sites').textContent = S.sites.length;
+  const agentId = S.currentAgentId;
+  const sites = await apiFetch(`/api/agents/${agentId}/sites`) || [];
+  if (agentId !== S.currentAgentId) return;
+  S.sites = sites;
+  document.getElementById('stat-sites').textContent = S.sites.filter(x => x.fileStatus !== 'deleted').length;
   renderSites();
 }
 
@@ -1175,34 +1146,44 @@ function renderSites() {
     grid.innerHTML = `<div class="empty-state" style="grid-column:1/-1">
       <div class="icon">🏗️</div>
       <p>No sites yet.</p>
-      <p style="font-size:.82rem;margin-top:6px">Click <strong>＋ Add Site</strong> to visually create an nginx server block — no conf file editing needed!</p>
+      <p style="font-size:.82rem;margin-top:6px">Server blocks from this server's config files appear here automatically once the agent connects.
+      Click <strong>＋ Add Site</strong> to create one visually.</p>
     </div>`;
     return;
   }
+  const FILE_BADGE = { added: 'badge-success', modified: 'badge-warn', deleted: 'badge-danger' };
   grid.innerHTML = S.sites.map(s => `
     <div class="site-card">
       <div class="site-card-header">
         <span class="site-card-icon">${SITE_ICONS[s.type] || '🌐'}</span>
         <div style="flex:1;min-width:0">
-          <div class="site-card-title">${esc(s.name)}</div>
-          <div class="site-card-host">${esc(s.serverName || '(any)')}</div>
+          <div class="site-card-title">${esc(s.discovered ? (s.serverName || s.name) : s.name)}</div>
+          <div class="site-card-host">${esc(s.discovered ? s.confPath.split('/').pop() : (s.serverName || '(any)'))}</div>
         </div>
       </div>
       <div class="site-card-badges">
-        <span class="badge badge-info">${s.type}</span>
-        ${S.configs.find(c => c.name === s.confPath && c.status !== 'live') ? `<span class="badge badge-warn">● unapplied</span>` : ''}
+        ${s.discovered ? `<span class="badge badge-info" title="Hand-written config — edit the file">📄 from file</span>` : `<span class="badge badge-accent" title="Generated by the Visual Builder">🏗️ builder</span>`}
+        <span class="badge badge-info">${s.type}${s.listenPort ? ' :' + s.listenPort : ''}</span>
+        ${s.fileStatus && s.fileStatus !== 'live' ? `<span class="badge ${FILE_BADGE[s.fileStatus] || 'badge-warn'}">● ${s.fileStatus === 'added' ? 'new' : s.fileStatus}, unapplied</span>` : ''}
         ${s.ssl ? `<span class="badge badge-success">🔒 SSL</span>` : `<span class="badge badge-warn">⚠ HTTP</span>`}
-        ${s.ssl && s.certId ? `<span class="badge badge-purple">🔐 Cert Bound</span>` : ''}
         ${s.upstream && s.upstream.length > 1 ? `<span class="badge badge-accent">${s.upstream.length} upstreams</span>` : ''}
         ${s.hsts ? `<span class="badge badge-success">HSTS</span>` : ''}
       </div>
       ${s.upstream && s.upstream.length ? `<div style="font-size:.75rem;color:var(--text-dim);font-family:var(--mono)">${s.upstream.slice(0,2).map(esc).join(', ')}${s.upstream.length > 2 ? ` +${s.upstream.length-2} more` : ''}</div>` : ''}
+      ${s.type === 'redirect' && s.redirectTo ? `<div style="font-size:.75rem;color:var(--text-dim);font-family:var(--mono)">→ ${esc(s.redirectTo)}</div>` : ''}
       <div class="site-card-actions">
-        <button class="btn-primary btn-sm" onclick="pushSite('${s.id}')" title="Apply all pending changes">📤 Apply</button>
-        <button class="btn-secondary btn-sm" onclick="editSite('${s.id}')">✏️ Edit</button>
-        <button class="btn-danger btn-sm" onclick="deleteSite('${s.id}')">🗑</button>
+        ${s.discovered
+          ? `<button class="btn-secondary btn-sm" onclick="openSiteFile('${esc(s.confPath)}')">📄 Edit file</button>`
+          : `<button class="btn-secondary btn-sm" onclick="editSite('${s.id}')">✏️ Edit</button>`}
+        ${s.fileStatus && s.fileStatus !== 'live' ? `<button class="btn-primary btn-sm" onclick="pushSite('${s.id}')" title="Apply all pending changes">📤 Apply</button>` : ''}
+        ${s.fileStatus !== 'deleted' ? `<button class="btn-danger btn-sm" onclick="deleteSite('${esc(s.id)}')">🗑</button>` : ''}
       </div>
     </div>`).join('');
+}
+
+async function openSiteFile(confPath) {
+  switchTab('configs');
+  await openConfig(confPath);
 }
 
 function openSiteModal(site = null) {
@@ -1371,53 +1352,15 @@ async function editSite(siteId) {
 
 async function deleteSite(siteId) {
   const s = S.sites.find(s => s.id === siteId);
-  const removeFile = s?.importedFrom
-    ? confirm(`Also delete ${s.confPath} from the server on the next Apply? (Cancel keeps the file and just forgets the site.)`)
-    : true;
-  if (!s?.importedFrom && !confirm(`Delete site "${s?.name}"? Its config file is removed from the server on the next Apply.`)) return;
-  await apiFetch(`/api/agents/${S.currentAgentId}/sites/${siteId}?removeFile=${removeFile}`, { method: 'DELETE' });
-  toast('Site deleted', 'info');
-  await loadSites();
-  await loadConfigs();
-}
-
-async function importSitesFromServer() {
-  const btn = document.getElementById('btn-import-sites');
-  if (btn) { btn.disabled = true; btn.textContent = '⏳ Importing...'; }
-
-  toast(`⬇ Reading ${S.confDir} as reported by the agent...`, 'info');
-  const res = await apiFetch(`/api/agents/${S.currentAgentId}/sites/import`, { method: 'POST' });
-
-  if (btn) { btn.disabled = false; btn.textContent = '⬇ Import from Server'; }
-
-  if (!res) { toast('Import failed — check the log', 'error'); return; }
-
-  const n = res.imported ? res.imported.length : 0;
-  const s = res.skipped  ? res.skipped.length  : 0;
-
-  if (n > 0) {
-    toast(`✅ Imported ${n} site${n !== 1 ? 's' : ''} from conf.d${s ? `, ${s} skipped` : ''}`, 'success');
-    await loadSites();
-    await loadConfigs();
-  } else if (res.message) {
-    toast(`ℹ️ ${res.message}`, 'info');
-  } else if (s > 0) {
-    // All skipped — show details
-    const reasons = res.skipped.map(sk => `${sk.file}: ${sk.reason}`).join('\n');
-    toast(`ℹ️ Nothing new to import (${s} already present or skipped)`, 'info');
-    appendLog(`Import from server:\n${reasons}\n`);
-    switchTab('terminal');
-  } else {
-    toast('Nothing imported', 'info');
-  }
-
-  // Show skipped details in log if any files had issues
-  if (res.skipped && res.skipped.some(sk => !sk.reason.includes('Already imported'))) {
-    switchTab('terminal');
-    appendLog(`⬇ Import from conf.d — ${n} imported, ${s} skipped:\n`);
-    (res.skipped || []).forEach(sk => appendLog(`  ⚠️  ${sk.file}: ${sk.reason}\n`));
-    (res.imported || []).forEach(im => appendLog(`  ✅ ${im.name} (${im.type}) — ${im.serverName || '(any)'}\n`));
-  }
+  if (!s) return;
+  const msg = s.discovered
+    ? `Delete ${s.confPath} from the server on the next Apply?` +
+      (s.blocksInFile > 1 ? `\n\nThat file contains ${s.blocksInFile} server blocks — all of them will be removed.` : '')
+    : `Delete site "${s.name}"? Its config file is removed from the server on the next Apply.`;
+  if (!confirm(msg)) return;
+  await apiFetch(`/api/agents/${S.currentAgentId}/sites/${encodeURIComponent(siteId)}`, { method: 'DELETE' });
+  toast('Marked for deletion — click Apply to push', 'info');
+  await Promise.all([loadSites(), loadConfigs(), loadAgents()]);
 }
 
 function pushSite(siteId) {
@@ -1427,7 +1370,10 @@ function pushSite(siteId) {
 // ─── CERTIFICATES ─────────────────────────────────────
 async function loadCerts() {
   if (!S.currentAgentId) return;
-  S.certs = await apiFetch(`/api/agents/${S.currentAgentId}/certs`) || [];
+  const agentId = S.currentAgentId;
+  const certs = await apiFetch(`/api/agents/${agentId}/certs`) || [];
+  if (agentId !== S.currentAgentId) return;
+  S.certs = certs;
   document.getElementById('stat-certs-count').textContent = S.certs.length;
   renderCerts();
 }
@@ -1437,35 +1383,38 @@ function renderCerts() {
   if (!S.certs.length) {
     list.innerHTML = `<div class="empty-state">
       <div class="icon">🔐</div>
-      <p>No certificates yet.</p>
-      <p style="font-size:.82rem;margin-top:6px">
-        <strong>Scan Server</strong> to pick up certs the agent reported,
-        <strong>Register Remote</strong> for certs already on the server,
-        or <strong>Upload Cert</strong> to stage new files.
-      </p>
+      <p>No certificates.</p>
+      <p style="font-size:.82rem;margin-top:6px">Certificates referenced by this server's nginx config
+        (<code>ssl_certificate</code>) appear here automatically. Use <strong>Upload Cert</strong> to add a new one.</p>
     </div>`;
     return;
   }
-  list.innerHTML = S.certs.map(c => `
+  list.innerHTML = S.certs.map(c => {
+    const m = c.certificateMeta;
+    return `
     <div class="cert-card">
       <div class="cert-icon">🔐</div>
       <div class="cert-info">
         <div class="cert-label">${esc(c.label)}</div>
         <div class="cert-paths">
-          cert: ${esc(c.remoteCertPath || '(not set)')}<br>
-          key:  ${esc(c.remoteKeyPath  || '(not set)')}
+          cert: ${esc(c.remoteCertPath)}<br>
+          key:  ${esc(c.remoteKeyPath || '(not set)')}
+          ${m?.dnsNames?.length ? `<br>names: ${m.dnsNames.map(esc).join(', ')}` : ''}
+          ${m?.issuer ? `<br>issuer: ${esc(m.issuer)}` : ''}
+          ${c.usedBy.length ? `<br>used by: ${c.usedBy.map(esc).join(', ')}` : ''}
         </div>
         <div style="margin-top:6px;display:flex;gap:6px;flex-wrap:wrap">
-          ${c.pending ? `<span class="badge badge-warn">● Staged — Apply to push</span>` : c.onServer ? `<span class="badge badge-success">On server</span>` : `<span class="badge badge-info">Not reported by agent</span>`}
-          ${c.certificateMeta?.subject ? `<span class="badge badge-accent">CN ${esc(c.certificateMeta.subject)}</span>` : ''}
-          ${certExpiryBadge(c.certificateMeta)}
+          ${c.pending ? `<span class="badge badge-warn">● Staged — Apply to push</span>` : c.onServer ? `<span class="badge badge-success">On server</span>` : `<span class="badge badge-info" title="The agent did not report this file — outside its allowed_directories, or not readable">Not reported by agent</span>`}
+          ${certExpiryBadge(m)}
+          ${c.inUse ? '' : `<span class="badge badge-info">Not used by any site</span>`}
         </div>
       </div>
       <div class="cert-actions">
-        ${c.pending ? `<button class="btn-purple btn-sm" onclick="pushCert('${c.id}')">📤 Apply</button>` : ''}
-        <button class="btn-danger btn-sm" onclick="deleteCert('${c.id}')">🗑</button>
+        ${c.pending ? `<button class="btn-purple btn-sm" onclick="pushCert('${esc(c.id)}')">📤 Apply</button>` : ''}
+        ${c.uploaded && !c.inUse ? `<button class="btn-danger btn-sm" onclick="deleteCert('${esc(c.id)}')" title="Forget this upload">🗑</button>` : ''}
       </div>
-    </div>`).join('');
+    </div>`;
+  }).join('');
 }
 
 function openUploadCert() {
@@ -1512,98 +1461,6 @@ async function uploadCert() {
   }
 }
 
-function openAddRemoteCert() {
-  ['rc-label','rc-cert','rc-key'].forEach(id => document.getElementById(id).value = '');
-  document.getElementById('remote-cert-modal').classList.add('open');
-}
-
-async function saveRemoteCert() {
-  const label          = document.getElementById('rc-label').value.trim();
-  const remoteCertPath = document.getElementById('rc-cert').value.trim();
-  const remoteKeyPath  = document.getElementById('rc-key').value.trim();
-  if (!label || !remoteCertPath || !remoteKeyPath) { toast('All fields are required', 'error'); return; }
-  const res = await apiFetch(`/api/agents/${S.currentAgentId}/certs/remote`, {
-    method: 'POST', body: { label, remoteCertPath, remoteKeyPath },
-  });
-  if (res?.id) {
-    toast(`Certificate "${label}" registered`, 'success');
-    document.getElementById('remote-cert-modal').classList.remove('open');
-    await loadCerts();
-  } else {
-    toast(`Error: ${res?.error || 'Unknown'}`, 'error');
-  }
-}
-
-async function scanCerts() {
-  toast('🔍 Checking certificate files reported by the agent...', 'info');
-  const res = await apiFetch(`/api/agents/${S.currentAgentId}/certs/scan`, { method: 'POST' });
-  if (!res) { toast('Scan failed', 'error'); return; }
-
-  // Reload certs first — auto-registered ones are already saved
-  await loadCerts();
-
-  const modal   = document.getElementById('scan-modal');
-  const results = document.getElementById('scan-results');
-
-  const autoCount = res.autoRegistered ? res.autoRegistered.length : 0;
-
-  if (autoCount > 0) {
-    toast(`✅ Auto-registered ${autoCount} certificate${autoCount !== 1 ? 's' : ''}`, 'success');
-  }
-
-  if (!res.files || !res.files.length) {
-    results.innerHTML = `<p style="color:var(--text-dim);padding:16px">The agent hasn't reported any certificate files. It only reports files nginx config references inside its allowed_directories.</p>`;
-  } else {
-    const autoIds = new Set((res.autoRegistered || []).map(c => c.remoteCertPath));
-
-    results.innerHTML = `
-      ${autoCount > 0 ? `
-        <div style="background:rgba(46,204,113,.1);border:1px solid rgba(46,204,113,.3);border-radius:var(--radius);padding:14px;margin-bottom:16px">
-          <div style="color:var(--success);font-weight:600;margin-bottom:8px">✅ Auto-registered ${autoCount} cert${autoCount !== 1 ? 's' : ''}</div>
-          ${(res.autoRegistered || []).map(c => `
-            <div style="font-size:.8rem;font-family:var(--mono);color:var(--text-dim)">
-              <strong style="color:var(--text)">${esc(c.label)}</strong><br>
-              cert: ${esc(c.remoteCertPath)}<br>
-              key:  ${esc(c.remoteKeyPath)}
-            </div>`).join('<hr style="border-color:var(--border);margin:8px 0">')}
-        </div>` : ''}
-
-      ${res.suggestions.map(sg => {
-        const alreadyDone = sg.bestCert && autoIds.has(sg.bestCert);
-        return `
-          <div style="background:var(--surface2);border:1px solid var(--border);border-radius:var(--radius);padding:14px;margin-bottom:10px">
-            <div style="font-family:var(--mono);font-size:.82rem;color:var(--accent);margin-bottom:8px">📁 ${esc(sg.dir)}</div>
-            <div style="font-size:.78rem;color:var(--text-dim);margin-bottom:10px">
-              ${sg.files.map(f => `<div>${esc(f)}</div>`).join('')}
-            </div>
-            ${alreadyDone
-              ? `<span class="badge badge-success">✅ Auto-registered</span>`
-              : sg.bestCert && sg.bestKey
-                ? `<button class="btn-success btn-sm" onclick="quickRegister('${esc(sg.dir)}','${esc(sg.bestCert)}','${esc(sg.bestKey)}')">✅ Register best match</button>`
-                : `<span class="badge badge-warn">⚠ No valid pair found</span>`
-            }
-          </div>`;
-      }).join('')}
-    `;
-  }
-
-  modal.classList.add('open');
-}
-
-async function quickRegister(dir, certPath, keyPath) {
-  const label = certPath.split('/').pop().replace(/\.(pem|crt|cer)$/,'');
-  const res = await apiFetch(`/api/agents/${S.currentAgentId}/certs/remote`, {
-    method: 'POST', body: { label, remoteCertPath: certPath, remoteKeyPath: keyPath },
-  });
-  if (res?.id) {
-    toast(`Registered ${label}`, 'success');
-    document.getElementById('scan-modal').classList.remove('open');
-    await loadCerts();
-  } else {
-    toast('Error registering cert', 'error');
-  }
-}
-
 function pushCert(certId) {
   doApply();
 }
@@ -1617,10 +1474,10 @@ function certExpiryBadge(m) {
 
 async function deleteCert(certId) {
   const c = S.certs.find(c => c.id === certId);
-  if (!confirm(`Forget certificate "${c?.label}"? Files on the server are not touched.`)) return;
-  await apiFetch(`/api/agents/${S.currentAgentId}/certs/${certId}`, { method: 'DELETE' });
-  toast('Certificate deleted', 'info');
-  await loadCerts();
+  if (!confirm(`Forget uploaded certificate "${c?.label}"? Files already on the server are left in place; unapplied uploads are dropped.`)) return;
+  const res = await apiFetch(`/api/agents/${S.currentAgentId}/certs?path=${encodeURIComponent(certId)}`, { method: 'DELETE' });
+  if (res?.ok) toast('Certificate forgotten', 'info'); else toast(res?.error || 'Error', 'error');
+  await Promise.all([loadCerts(), loadConfigs(), loadAgents()]);
 }
 
 // ─── RAW CONFIGS ──────────────────────────────────────

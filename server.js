@@ -78,6 +78,16 @@ for (const [name, value] of [['ADMIN_PASSWORD', ADMIN_PASS], ['SESSION_SECRET', 
   }
 })();
 
+// Imported-site snapshots are no longer used — server blocks are read live from the
+// config files the agent reports.
+(function dropImportedSiteSnapshots() {
+  let n = 0;
+  for (const a of store.readAgents()) {
+    for (const s of store.readSites(a.id)) if (s.importedFrom && store.deleteSite(a.id, s.id)) n++;
+  }
+  if (n) console.log(`[nginx-manager] Removed ${n} imported site snapshot(s); sites now come live from the agent.`);
+})();
+
 const tls = ensureTls(path.join(store.DATA_DIR, 'tls'));
 const mp  = new ManagementPlane({ tls, port: GRPC_PORT });
 
@@ -433,23 +443,84 @@ app.post('/api/agents/:id/sync', requireAuth, async (req, res) => {
 });
 
 // ---------------------------------------------------------------------------
-// Certificates
+// Live views derived from what the agent reports (no scanning / importing)
 // ---------------------------------------------------------------------------
-function certWithMeta(agentId, cert) {
+// Parse every nginx .conf file in the desired file set (live + pending edits).
+// Returns [{ path, status, sites: [parsed server blocks] }] — re-derived on each call,
+// so the Builder and Certificates tabs always reflect the agent's latest overview.
+function parsedConfFiles(agentId) {
   const st = store.readState(agentId);
   const desired = store.desiredFiles(st);
-  const f = desired[cert.remoteCertPath];
-  return {
-    ...cert,
-    certificateMeta: f ? f.certificateMeta || null : null,
-    onServer: !!st.live[cert.remoteCertPath],
-    pending: [cert.remoteCertPath, cert.remoteKeyPath, cert.remoteChainPath].some(p => p && st.draft[p]),
-  };
+  const out = [];
+  for (const name of Object.keys(desired).sort()) {
+    if (!name.endsWith('.conf') || desired[name].certificateMeta) continue;
+    const content = readFileContent(st, name);
+    if (typeof content !== 'string') continue;
+    let sites = [];
+    try { sites = parseNginxConf(path.basename(name), content); } catch {}
+    out.push({ path: name, status: fileStatus(st, name), sites });
+  }
+  return { st, desired, files: out };
 }
 
+function builderSites(agentId) {
+  return store.readSites(agentId).filter(s => !s.importedFrom);
+}
+
+// Every certificate nginx config references (ssl_certificate / ssl_certificate_key),
+// plus uploads staged through the UI that nothing references yet.
+function deriveCerts(agentId) {
+  const { st, desired, files } = parsedConfFiles(agentId);
+  const byPath = new Map();
+  const entry = certPath => {
+    if (!byPath.has(certPath)) {
+      byPath.set(certPath, { id: certPath, certPath, keyPaths: new Set(), sites: new Set(), files: new Set() });
+    }
+    return byPath.get(certPath);
+  };
+  for (const f of files) {
+    for (const s of f.sites) {
+      if (!s.certFile) continue;
+      const e = entry(s.certFile);
+      if (s.keyFile) e.keyPaths.add(s.keyFile);
+      e.sites.add(s.serverName ? s.serverName.split(/\s+/)[0] : s.name);
+      e.files.add(f.path);
+    }
+  }
+  const uploads = store.readCerts(agentId).filter(c => c.uploaded);
+  for (const u of uploads) {
+    const e = entry(u.remoteCertPath);
+    e.keyPaths.add(u.remoteKeyPath);
+    e.uploadLabel = u.label;
+    e.chainPath = u.remoteChainPath || null;
+  }
+  return [...byPath.values()].map(e => {
+    const meta = desired[e.certPath] ? desired[e.certPath].certificateMeta || null : null;
+    const keyPath = [...e.keyPaths][0] || null;
+    const dirName = path.basename(path.dirname(e.certPath));
+    return {
+      id: e.id,
+      label: e.uploadLabel || (meta && meta.subject) || (dirName !== 'ssl' && dirName !== 'certs' ? dirName : path.basename(e.certPath)),
+      remoteCertPath: e.certPath,
+      remoteKeyPath: keyPath,
+      remoteChainPath: e.chainPath || null,
+      certificateMeta: meta,
+      usedBy: [...e.sites].sort(),
+      referencedIn: [...e.files].sort(),
+      inUse: e.sites.size > 0,
+      uploaded: !!e.uploadLabel,
+      onServer: !!st.live[e.certPath],
+      pending: [e.certPath, keyPath, e.chainPath].some(p => p && st.draft[p]),
+    };
+  }).sort((a, b) => a.label.localeCompare(b.label));
+}
+
+// ---------------------------------------------------------------------------
+// Certificates
+// ---------------------------------------------------------------------------
 app.get('/api/agents/:id/certs', requireAuth, (req, res) => {
   const agent = requireAgent(req, res); if (!agent) return;
-  res.json(store.readCerts(agent.id).map(c => certWithMeta(agent.id, c)));
+  res.json(deriveCerts(agent.id));
 });
 
 // Upload a cert+key pair — staged as files at the remote paths, pushed with Apply
@@ -476,125 +547,51 @@ app.post('/api/agents/:id/certs', requireAuth,
     store.stageFile(agent.id, remoteKeyPath,  file('keyFile').buffer,  '0600');
     if (file('chainFile') && remoteChainPath) store.stageFile(agent.id, remoteChainPath, file('chainFile').buffer, '0644');
 
-    const certs = store.readCerts(agent.id);
-    const entry = {
-      id: uuidv4(), label,
+    // Remember uploads so they're listed (and selectable in the Builder) before any
+    // config references them.
+    const certs = store.readCerts(agent.id).filter(c => c.remoteCertPath !== remoteCertPath);
+    certs.push({
+      id: remoteCertPath, label,
       remoteCertPath, remoteKeyPath,
       remoteChainPath: file('chainFile') ? remoteChainPath : null,
       uploaded: true,
       createdAt: new Date().toISOString(),
-    };
-    certs.push(entry);
+    });
     store.writeCerts(agent.id, certs);
     io.emit('files', { agentId: agent.id });
     io.emit('agents');
-    res.json(certWithMeta(agent.id, entry));
+    res.json(deriveCerts(agent.id).find(c => c.id === remoteCertPath));
   }
 );
 
-// Register a cert that already exists on the server (no upload)
-app.post('/api/agents/:id/certs/remote', requireAuth, (req, res) => {
+// Forget an uploaded cert that no config uses. If its files were never applied the
+// staged upload is dropped; if they are on the server they are left in place.
+app.delete('/api/agents/:id/certs', requireAuth, (req, res) => {
   const agent = requireAgent(req, res); if (!agent) return;
-  const { label } = req.body || {};
-  const remoteCertPath = cleanRemotePath(req.body && req.body.remoteCertPath);
-  const remoteKeyPath  = cleanRemotePath(req.body && req.body.remoteKeyPath);
-  if (!label || !remoteCertPath || !remoteKeyPath)
-    return res.status(400).json({ error: 'label and absolute remoteCertPath, remoteKeyPath required' });
-  const certs = store.readCerts(agent.id);
-  const cert = {
-    id: uuidv4(), label, remoteCertPath, remoteKeyPath, remoteChainPath: null,
-    remoteOnly: true, createdAt: new Date().toISOString(),
-  };
-  certs.push(cert);
-  store.writeCerts(agent.id, certs);
-  res.json(certWithMeta(agent.id, cert));
-});
-
-// "Scan" the certificate files the agent reported (those referenced by nginx config
-// in its allowed directories) and auto-register cert/key pairs.
-app.post('/api/agents/:id/certs/scan', requireAuth, (req, res) => {
-  const agent = requireAgent(req, res); if (!agent) return;
+  const certPath = cleanRemotePath(req.query.path);
+  const cert = certPath && deriveCerts(agent.id).find(c => c.id === certPath);
+  if (!cert || !cert.uploaded) return res.status(404).json({ error: 'Uploaded cert not found' });
+  if (cert.inUse) return res.status(409).json({ error: `In use by ${cert.usedBy.join(', ')} — remove it from those configs first` });
   const st = store.readState(agent.id);
-  const files = Object.keys(st.live).filter(f => /\.(pem|crt|cer|key)$/i.test(f) || st.live[f].certificateMeta).sort();
-
-  // A file is a "cert" if the agent parsed certificate metadata from it, or by name;
-  // a file is a "key" if its basename contains privkey / private / key.
-  const isKey = f => {
-    const b = path.basename(f).toLowerCase();
-    return b.includes('privkey') || b.includes('private') || b.endsWith('.key') ||
-      (b.includes('key') && b.endsWith('.pem'));
-  };
-  const isCert = f => !isKey(f) && (!!st.live[f].certificateMeta || /\.(pem|crt|cer)$/i.test(f));
-
-  const byDir = {};
-  for (const f of files) (byDir[path.dirname(f)] = byDir[path.dirname(f)] || []).push(f);
-
-  const suggestions = Object.entries(byDir).map(([dir, dirFiles]) => {
-    const certs = dirFiles.filter(isCert);
-    const keys  = dirFiles.filter(isKey);
-    const bestCert = certs.find(f => path.basename(f) === 'fullchain.pem')
-      || certs.find(f => path.basename(f).startsWith('cert'))
-      || certs[0];
-    const bestKey = keys.find(f => path.basename(f) === 'privkey.pem')
-      || keys.find(f => path.basename(f).includes('privkey'))
-      || keys[0];
-    return { dir, files: dirFiles, certs, keys, bestCert, bestKey };
-  }).filter(s => s.certs.length > 0 || s.keys.length > 0);
-
-  const stored = store.readCerts(agent.id);
-  const autoRegistered = [];
-  for (const sg of suggestions) {
-    if (!sg.bestCert || !sg.bestKey) continue;
-    if (stored.some(c => c.remoteCertPath === sg.bestCert && c.remoteKeyPath === sg.bestKey)) continue;
-    const dirParts = sg.dir.split('/').filter(Boolean);
-    const cert = {
-      id: uuidv4(),
-      label: dirParts[dirParts.length - 1] || sg.dir,
-      remoteCertPath: sg.bestCert,
-      remoteKeyPath: sg.bestKey,
-      remoteChainPath: sg.certs.find(f => path.basename(f).includes('chain') && f !== sg.bestCert) || null,
-      remoteOnly: true,
-      autoDiscovered: true,
-      createdAt: new Date().toISOString(),
-    };
-    stored.push(cert);
-    autoRegistered.push(cert);
+  for (const p of [cert.remoteCertPath, cert.remoteKeyPath, cert.remoteChainPath]) {
+    if (p && st.draft[p] && !st.live[p]) delete st.draft[p];
   }
-  if (autoRegistered.length) store.writeCerts(agent.id, stored);
-
-  res.json({ files, suggestions, autoRegistered });
-});
-
-app.put('/api/agents/:id/certs/:certId', requireAuth, (req, res) => {
-  const agent = requireAgent(req, res); if (!agent) return;
-  const certs = store.readCerts(agent.id);
-  const idx = certs.findIndex(c => c.id === req.params.certId);
-  if (idx === -1) return res.status(404).json({ error: 'Cert not found' });
-  const { label } = req.body || {};
-  if (label) certs[idx].label = label;
-  for (const k of ['remoteCertPath', 'remoteKeyPath', 'remoteChainPath']) {
-    const v = req.body && req.body[k] ? cleanRemotePath(req.body[k]) : null;
-    if (v) certs[idx][k] = v;
-  }
-  store.writeCerts(agent.id, certs);
-  res.json(certWithMeta(agent.id, certs[idx]));
-});
-
-// Removes the registry entry only — files on the server are left alone.
-app.delete('/api/agents/:id/certs/:certId', requireAuth, (req, res) => {
-  const agent = requireAgent(req, res); if (!agent) return;
-  const certs = store.readCerts(agent.id);
-  if (!certs.some(c => c.id === req.params.certId)) return res.status(404).json({ error: 'Cert not found' });
-  store.writeCerts(agent.id, certs.filter(c => c.id !== req.params.certId));
+  store.writeState(agent.id, st);
+  store.writeCerts(agent.id, store.readCerts(agent.id).filter(c => c.remoteCertPath !== certPath));
+  io.emit('files', { agentId: agent.id });
+  io.emit('agents');
   res.json({ ok: true });
 });
 
 // ---------------------------------------------------------------------------
 // Visual-builder Sites
+//   Builder sites: created here; their whole .conf file is generated from the form.
+//   Discovered sites: server blocks in any other .conf the agent reported. Shown
+//   read-only (edit the file) — regenerating them would drop unsupported directives.
 // ---------------------------------------------------------------------------
 function resolveCertPaths(agentId, site) {
   if (site.ssl && site.certId) {
-    const cert = store.readCerts(agentId).find(c => c.id === site.certId);
+    const cert = deriveCerts(agentId).find(c => c.id === site.certId);
     if (cert) {
       site.certFile = cert.remoteCertPath || site.certFile;
       site.keyFile  = cert.remoteKeyPath  || site.keyFile;
@@ -605,7 +602,25 @@ function resolveCertPaths(agentId, site) {
 
 app.get('/api/agents/:id/sites', requireAuth, (req, res) => {
   const agent = requireAgent(req, res); if (!agent) return;
-  res.json(store.readSites(agent.id));
+  const { st, files } = parsedConfFiles(agent.id);
+  const managed = builderSites(agent.id).map(s => {
+    const p = s.confPath || siteConfPath(agent, s);
+    return { ...s, confPath: p, managed: true, fileStatus: fileStatus(st, p) };
+  });
+  const managedPaths = new Set(managed.map(s => s.confPath));
+  const discovered = [];
+  for (const f of files) {
+    if (managedPaths.has(f.path)) continue;
+    f.sites.forEach((s, i) => discovered.push({
+      ...s,
+      id: `file:${f.path}#${i}`,
+      confPath: f.path,
+      discovered: true,
+      fileStatus: f.status,
+      blocksInFile: f.sites.length,
+    }));
+  }
+  res.json([...managed, ...discovered]);
 });
 
 app.post('/api/agents/:id/sites', requireAuth, (req, res) => {
@@ -622,7 +637,7 @@ app.post('/api/agents/:id/sites', requireAuth, (req, res) => {
     staticRoot:      b.staticRoot      || '/var/www/html',
     redirectTo:      b.redirectTo      || '',
     ssl:             b.ssl             || false,
-    certId:          b.certId          || null,         // links to certs store
+    certId:          b.certId          || null,         // cert path from the Certificates tab
     certFile:        b.certFile        || '',           // remote path
     keyFile:         b.keyFile         || '',           // remote path
     hsts:            b.hsts            || false,
@@ -634,6 +649,10 @@ app.post('/api/agents/:id/sites', requireAuth, (req, res) => {
     updatedAt:       new Date().toISOString(),
   });
   site.confPath = siteConfPath(agent, site);
+  const desired = store.desiredFiles(store.readState(agent.id));
+  if (desired[site.confPath] && !builderSites(agent.id).some(s => s.confPath === site.confPath)) {
+    return res.status(409).json({ error: `${site.confPath} already exists — choose another site name` });
+  }
   store.writeSite(agent.id, site);
   store.stageFile(agent.id, site.confPath, siteToNginxConf(site));
   io.emit('files', { agentId: agent.id });
@@ -643,16 +662,18 @@ app.post('/api/agents/:id/sites', requireAuth, (req, res) => {
 
 app.put('/api/agents/:id/sites/:siteId', requireAuth, (req, res) => {
   const agent = requireAgent(req, res); if (!agent) return;
+  if (req.params.siteId.startsWith('file:')) {
+    return res.status(400).json({ error: 'This site comes from a hand-written config file — edit it in Raw Configs' });
+  }
   const existing = store.readSite(agent.id, req.params.siteId);
-  if (!existing) return res.status(404).json({ error: 'Site not found' });
+  if (!existing || existing.importedFrom) return res.status(404).json({ error: 'Site not found' });
 
   const site = resolveCertPaths(agent.id, {
     ...existing, ...req.body,
     id: existing.id, createdAt: existing.createdAt, updatedAt: new Date().toISOString(),
   });
-  // Imported sites keep their original file; builder sites follow the site name.
   const oldConf = existing.confPath || siteConfPath(agent, existing);
-  site.confPath = existing.importedFrom ? oldConf : siteConfPath(agent, site);
+  site.confPath = siteConfPath(agent, site);
   if (oldConf !== site.confPath) store.stageDelete(agent.id, oldConf);
   store.writeSite(agent.id, site);
   store.stageFile(agent.id, site.confPath, siteToNginxConf(site));
@@ -661,12 +682,19 @@ app.put('/api/agents/:id/sites/:siteId', requireAuth, (req, res) => {
   res.json(site);
 });
 
+// Builder site: forget it and delete its generated file.
+// Discovered site (id "file:<path>#n"): delete the whole file it lives in.
 app.delete('/api/agents/:id/sites/:siteId', requireAuth, (req, res) => {
   const agent = requireAgent(req, res); if (!agent) return;
-  const site = store.readSite(agent.id, req.params.siteId);
-  if (!site) return res.status(404).json({ error: 'Site not found' });
-  store.deleteSite(agent.id, site.id);
-  if (!site.importedFrom || req.query.removeFile === 'true') {
+  const id = req.params.siteId;
+  if (id.startsWith('file:')) {
+    const confPath = cleanRemotePath(id.slice(5).replace(/#\d+$/, ''));
+    if (!confPath) return res.status(400).json({ error: 'bad site id' });
+    store.stageDelete(agent.id, confPath);
+  } else {
+    const site = store.readSite(agent.id, id);
+    if (!site) return res.status(404).json({ error: 'Site not found' });
+    store.deleteSite(agent.id, site.id);
     store.stageDelete(agent.id, site.confPath || siteConfPath(agent, site));
   }
   io.emit('files', { agentId: agent.id });
@@ -683,61 +711,6 @@ app.post('/api/agents/:id/sites/preview', requireAuth, (req, res) => {
   } catch (err) {
     res.status(400).json({ error: err.message });
   }
-});
-
-// Import conf.d files the agent reported into the Visual Builder
-app.post('/api/agents/:id/sites/import', requireAuth, (req, res) => {
-  const agent = requireAgent(req, res); if (!agent) return;
-  const dir = confDir(agent);
-  const st  = store.readState(agent.id);
-  const desired = store.desiredFiles(st);
-  const confFiles = Object.keys(desired).filter(f => path.posix.dirname(f) === dir && f.endsWith('.conf')).sort();
-
-  if (!confFiles.length) {
-    return res.json({ imported: [], skipped: [], message: `No .conf files reported in ${dir} — is the agent connected?` });
-  }
-
-  const existing = store.readSites(agent.id);
-  const imported = [];
-  const skipped  = [];
-
-  for (const remotePath of confFiles) {
-    const fname = path.basename(remotePath);
-    if (existing.some(e => (e.confPath || '') === remotePath && !e.importedFrom)) {
-      skipped.push({ file: fname, reason: 'Managed by the Visual Builder' });
-      continue;
-    }
-    const content = readFileContent(st, remotePath);
-    if (typeof content !== 'string') {
-      skipped.push({ file: fname, reason: 'Contents not synced from the agent yet — run Sync' });
-      continue;
-    }
-
-    let sites;
-    try { sites = parseNginxConf(fname, content); }
-    catch (err) {
-      skipped.push({ file: fname, reason: `Parse error: ${err.message}` });
-      continue;
-    }
-    if (!sites.length) {
-      skipped.push({ file: fname, reason: 'No server blocks found (may be a redirect-only block)' });
-      continue;
-    }
-
-    for (const site of sites) {
-      const dup = existing.find(e => e.importedFrom === fname && e.serverName === site.serverName);
-      if (dup) {
-        skipped.push({ file: fname, reason: `Already imported (${site.name})` });
-        continue;
-      }
-      site.confPath = remotePath;
-      store.writeSite(agent.id, site);
-      imported.push(site);
-      existing.push(site);
-    }
-  }
-
-  res.json({ imported, skipped });
 });
 
 // ---------------------------------------------------------------------------
