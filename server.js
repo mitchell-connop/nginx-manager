@@ -142,7 +142,6 @@ function readFileContent(st, name) {
 
 function setupInfo(agent, req, token) {
   const host = process.env.AGENT_CONNECT_HOST || req.hostname;
-  const tokenValue = token || '<paste the token shown when the server was added>';
   const allowed = ['/etc/nginx', '/usr/local/etc/nginx', '/usr/share/nginx/modules',
     '/var/run/nginx', '/var/log/nginx', '/etc/letsencrypt', '/etc/ssl/nginx'];
   const agentConf = [
@@ -170,15 +169,27 @@ function setupInfo(agent, req, token) {
     '    skip_verify: false',
   ].join('\n') + '\n';
 
+  // Without a token (only its hash is stored) the script refuses to run rather than
+  // installing a placeholder the manager will reject.
+  const tokenLines = token
+    ? [`TOKEN='${token}'`]
+    : ['# No token in this copy of the script — click "New Token" in nginx-manager, or run with TOKEN=<token> set',
+       'TOKEN="${TOKEN:-}"',
+       '[ -n "$TOKEN" ] || { echo "ERROR: no agent token. In nginx-manager click New Token and use that script." >&2; exit 1; }'];
+
   const script = [
+    '#!/bin/bash',
     '# Run as root on the nginx server',
+    'set -euo pipefail',
+    ...tokenLines,
+    '',
     '# 1. Install NGINX Agent v3 from the nginx.org repo (uses the existing nginx.org signing key)',
     'echo "deb [signed-by=/usr/share/keyrings/nginx-archive-keyring.gpg] http://packages.nginx.org/nginx-agent/debian $(. /etc/os-release && echo $VERSION_CODENAME) agent" \\',
     '  > /etc/apt/sources.list.d/nginx-agent.list',
     'apt-get update && apt-get install -y nginx-agent',
     '',
     '# 2. Token + manager CA',
-    `install -m 600 /dev/null /etc/nginx-agent/manager.token && printf '%s' '${tokenValue}' > /etc/nginx-agent/manager.token`,
+    `install -m 600 /dev/null /etc/nginx-agent/manager.token && printf '%s' "$TOKEN" > /etc/nginx-agent/manager.token`,
     "cat > /etc/nginx-agent/manager-ca.pem <<'EOF'",
     tls.ca.trim(),
     'EOF',

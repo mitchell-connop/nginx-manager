@@ -476,6 +476,11 @@
 <div class="modal-backdrop" id="setup-modal">
   <div class="modal modal-wide">
     <h3>🔑 Connect NGINX Agent — <span id="setup-agent-name"></span></h3>
+    <div id="setup-notoken" style="display:none;background:rgba(245,166,35,.12);border:1px solid rgba(245,166,35,.4);border-radius:var(--radius);padding:12px 14px;margin-bottom:14px;font-size:.85rem">
+      ⚠️ This script has <strong>no agent token</strong> — only a hash of it is stored, so it can't be shown again.
+      It will stop with an error if run as-is. Click <strong>♻ New Token</strong> below to get a ready-to-run script
+      (this disconnects the agent until the new token is installed).
+    </div>
     <div id="setup-token-wrap" style="display:none">
       <div class="form-group">
         <label>Agent token — shown once, copy it now</label>
@@ -985,6 +990,7 @@ async function saveAgent() {
 function showSetup(name, setup, token) {
   document.getElementById('setup-agent-name').textContent = name;
   document.getElementById('setup-token-wrap').style.display = token ? '' : 'none';
+  document.getElementById('setup-notoken').style.display = token ? 'none' : '';
   document.getElementById('setup-token').value = token || '';
   document.getElementById('setup-script').value = setup.script;
   document.getElementById('setup-host').textContent = setup.host;
