@@ -774,7 +774,7 @@
 <script>
 // ─── STATE ───────────────────────────────────────────
 const S = {
-  agents: [], currentAgentId: null,
+  agents: [], currentAgentId: null, groups: {},
   configs: [], certs: [], sites: [], confDir: '/etc/nginx/conf.d',
   currentFile: null,
   socket: null,
@@ -816,6 +816,7 @@ function initSocket() {
     enableButtons();
   });
   S.socket.on('agents', debounce(loadAgents, 300));
+  S.socket.on('groups', debounce(async () => { await loadGroups(); renderAgentList(); }, 300));
   S.socket.on('files', debounce(({ agentId } = {}) => {
     if (agentId === S.currentAgentId) { loadConfigs(); loadCerts(); loadSites(); }
   }, 300));
@@ -867,8 +868,14 @@ async function apiUpload(url, formData) {
 }
 
 // ─── AGENTS ───────────────────────────────────────────
+async function loadGroups() {
+  const list = await apiFetch('/api/groups') || [];
+  S.groups = Object.fromEntries(list.map(g => [g.name, g]));
+}
+
 async function loadAgents() {
-  S.agents = await apiFetch('/api/agents') || [];
+  const [agents] = await Promise.all([apiFetch('/api/agents'), loadGroups()]);
+  S.agents = agents || [];
   renderAgentList();
   if (S.currentAgentId) renderAgentHeader();
   const lbl = document.getElementById('agent-count-label');
@@ -917,7 +924,7 @@ function renderAgentList() {
       <div class="agent-item ${a.id === S.currentAgentId ? 'active' : ''}" onclick="selectAgent('${a.id}')">
         <div class="agent-dot ${a.online ? 'online' : (a.lastSeen ? 'offline' : '')}" id="dot-${a.id}" title="${a.online ? 'Agent connected' : a.lastSeen ? 'Agent disconnected' : 'Waiting for agent'}"></div>
         <div class="agent-item-info">
-          <div class="agent-item-name">${esc(a.name)}${a.pendingChanges ? ` <span class="badge badge-warn" title="Unapplied changes">${a.pendingChanges}</span>` : ''}</div>
+          <div class="agent-item-name">${esc(a.name)}${vipHeldBy(a) ? ` <span class="badge badge-success" title="Currently holds VIP ${esc(vipHeldBy(a))}">VIP</span>` : ''}${a.pendingChanges ? ` <span class="badge badge-warn" title="Unapplied changes">${a.pendingChanges}</span>` : ''}</div>
           <div class="agent-item-host">${esc(a.hostname || (a.lastSeen ? 'agent offline' : 'awaiting agent'))}</div>
         </div>
       </div>`).join('');
@@ -932,6 +939,7 @@ function renderAgentList() {
             <button class="group-menu-btn" onclick="event.stopPropagation();showGroupMenu(event,'${esc(gKey)}')" title="Group options">⋯</button>
           ` : ''}
         </div>
+        ${gKey !== '__ungrouped__' ? vipPill(gKey) : ''}
         <div class="group-items ${isCollapsed ? 'collapsed' : ''}" id="gi-${cssId(gKey)}">
           ${agentItems}
         </div>
@@ -965,7 +973,7 @@ function renderAgentHeader() {
   if (!a) return;
   document.getElementById('panel-agent-name').textContent = a.name;
   const conn = a.online ? '🟢 agent connected' : a.lastSeen ? `🔴 agent offline (last seen ${formatDate(a.lastSeen)})` : '⚪ waiting for agent — see Agent Setup';
-  const bits = [a.hostname, a.nginxVersion && `nginx ${a.nginxVersion}`, a.configPath, conn].filter(Boolean);
+  const bits = [a.hostname, a.address, a.nginxVersion && `nginx ${a.nginxVersion}`, a.configPath, conn].filter(Boolean);
   document.getElementById('panel-agent-host').textContent = bits.join('  •  ');
   document.getElementById('stat-host').textContent = a.hostname || '—';
   const n = a.pendingChanges || 0;
@@ -1126,6 +1134,7 @@ function showGroupMenu(event, gKey) {
   menu.className = 'ctx-menu';
   menu.innerHTML = `
     <div class="ctx-item" onclick="renameGroup('${esc(gKey)}')">✏️ Rename group</div>
+    <div class="ctx-item" onclick="setGroupVip('${esc(gKey)}')">🛜 ${S.groups[gKey]?.vip ? 'Change' : 'Set'} VIP…</div>
     <div class="ctx-item" onclick="openAddAgent('${esc(gKey)}')">＋ Add server here</div>
     <div class="ctx-item" onclick="moveGroupUp('${esc(gKey)}')">⬆ Move up</div>
     <div class="ctx-item" onclick="moveGroupDown('${esc(gKey)}')">⬇ Move down</div>
@@ -1145,11 +1154,7 @@ async function renameGroup(gKey) {
   const newName = prompt(`Rename group "${gKey}" to:`, gKey);
   if (!newName || newName.trim() === gKey) return;
   const name = newName.trim();
-  // Update all agents in this group
-  const toUpdate = S.agents.filter(a => (a.group || '').trim() === gKey);
-  await Promise.all(toUpdate.map(a =>
-    apiFetch(`/api/agents/${a.id}`, { method: 'PUT', body: { group: name } })
-  ));
+  await apiFetch(`/api/groups/${encodeURIComponent(gKey)}/rename`, { method: 'POST', body: { name } });
   // Update group order
   const order = getGroupOrder().map(g => g === gKey ? name : g);
   setGroupOrder(order);
@@ -1158,6 +1163,52 @@ async function renameGroup(gKey) {
   if (col.has(gKey)) { col.delete(gKey); col.add(name); setCollapsed(col); }
   await loadAgents();
   toast(`Renamed group to "${name}"`, 'success');
+}
+
+// ── Group VIP (keepalived) ─────────────────────────────
+function vipHeldBy(agent) {
+  const g = S.groups[(agent.group || '').trim()];
+  return g?.status?.holderId === agent.id ? g.vip : null;
+}
+
+function vipPill(gKey) {
+  const g = S.groups[gKey];
+  if (!g?.vip) return '';
+  const st = g.status;
+  let cls = 'badge-info', text = `🛜 ${g.vip}`, tip = `VIP ${g.vip}:${g.port} — checking…`;
+  if (st) {
+    const since = st.holderSince ? ` since ${formatDate(st.holderSince)}` : '';
+    if (!st.reachable) {
+      cls = 'badge-danger'; text += ' ✕ unreachable';
+      tip = `VIP ${g.vip}:${g.port} did not answer (${st.error || 'no response'}) — checked ${formatDate(st.checkedAt)}`;
+    } else if (st.conflict) {
+      cls = 'badge-danger'; text += ` ⚠ ${st.conflict.join(' + ')}`;
+      tip = `Split brain: ${st.conflict.join(' and ')} both answer for ${g.vip}`;
+    } else if (st.holderName) {
+      cls = 'badge-success'; text += ` → ${st.holderName}`;
+      tip = `VIP ${g.vip}:${g.port} held by ${st.holderName}${since} · ${st.latencyMs} ms · MAC ${st.vipMac}` +
+        (st.previousHolder ? ` · previously ${st.previousHolder}` : '') + ` · checked ${formatDate(st.checkedAt)}`;
+    } else {
+      cls = 'badge-warn'; text += ' → ?';
+      tip = `VIP ${g.vip}:${g.port} answers (${st.latencyMs} ms) but its MAC ${st.vipMac || '(unknown)'} doesn't match any connected server in this group` +
+        ' — the manager must be on the same subnet, and each server\'s agent connected';
+    }
+  }
+  return `<div style="padding:0 10px 6px 26px"><span class="badge ${cls}" title="${esc(tip)}" style="cursor:help;max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(text)}</span></div>`;
+}
+
+async function setGroupVip(gKey) {
+  closeCtxMenu();
+  const cur = S.groups[gKey];
+  const input = prompt(`Virtual IP (keepalived) for group "${gKey}" — e.g. 172.16.40.50 or 172.16.40.50:443.\nLeave empty to remove.`,
+    cur?.vip ? `${cur.vip}${cur.port && cur.port !== 443 ? ':' + cur.port : ''}` : '');
+  if (input === null) return;
+  const [vip, port] = input.trim().split(':');
+  const res = await apiFetch(`/api/groups/${encodeURIComponent(gKey)}`, { method: 'PUT', body: { vip: vip || '', port: parseInt(port || '443', 10) } });
+  if (res?.error) { toast(`❌ ${res.error}`, 'error'); return; }
+  await loadGroups();
+  renderAgentList();
+  toast(vip ? `VIP ${vip} set for ${gKey}` : `VIP removed from ${gKey}`, 'success');
 }
 
 async function ungroup(gKey) {

@@ -45,6 +45,7 @@ const { ManagementPlane } = require('./lib/mpi');
 const { siteToNginxConf, parseNginxConf } = require('./lib/nginxconf');
 const proxyfile = require('./lib/proxyfile');
 const { unifiedDiff } = require('./lib/linediff');
+const { VipMonitor } = require('./lib/vip');
 
 // ---------------------------------------------------------------------------
 // Config
@@ -367,6 +368,63 @@ app.get('/api/agents/:id/status', requireAuth, (req, res) => {
     configPath: st.configPath,
     fileCount: Object.keys(st.live).length,
   });
+});
+
+// ---------------------------------------------------------------------------
+// Groups — optional keepalived/VRRP virtual IP per group, watched by VipMonitor
+// ---------------------------------------------------------------------------
+const IPV4 = /^(25[0-5]|2[0-4]\d|1?\d?\d)(\.(25[0-5]|2[0-4]\d|1?\d?\d)){3}$/;
+
+function groupList() {
+  const settings = store.readGroups();
+  const names = new Set([...Object.keys(settings), ...store.readAgents().map(a => (a.group || '').trim()).filter(Boolean)]);
+  return [...names].map(name => ({ name, vip: (settings[name] || {}).vip || '', port: (settings[name] || {}).port || 443 }));
+}
+
+const vipMonitor = new VipMonitor({
+  getGroups: groupList,
+  getMembers: name => store.readAgents().filter(a => (a.group || '').trim() === name)
+    .map(a => ({ id: a.id, name: a.name, address: a.address || null })),
+});
+
+app.get('/api/groups', requireAuth, (req, res) => {
+  res.json(groupList().map(g => ({ ...g, status: vipMonitor.status.get(g.name) || null })));
+});
+
+// Set or clear a group's VIP: { vip: "172.16.40.50" | "", port?: 443 }
+app.put('/api/groups/:name', requireAuth, async (req, res) => {
+  const name = String(req.params.name).trim();
+  if (!name) return res.status(400).json({ error: 'group name required' });
+  const vip = String((req.body && req.body.vip) || '').trim();
+  const port = parseInt((req.body && req.body.port) || 443, 10);
+  if (vip && !IPV4.test(vip)) return res.status(400).json({ error: 'VIP must be an IPv4 address' });
+  if (!(port > 0 && port < 65536)) return res.status(400).json({ error: 'port must be 1-65535' });
+  const groups = store.readGroups();
+  if (vip) groups[name] = { vip, port };
+  else delete groups[name];
+  store.writeGroups(groups);
+  if (vip) await vipMonitor.check({ name, vip, port });
+  else await vipMonitor.tick();
+  io.emit('groups');
+  res.json({ name, vip, port, status: vipMonitor.status.get(name) || null });
+});
+
+// Rename a group: moves its members and its VIP setting
+app.post('/api/groups/:name/rename', requireAuth, (req, res) => {
+  const from = String(req.params.name).trim();
+  const to = String((req.body && req.body.name) || '').trim();
+  if (!from || !to) return res.status(400).json({ error: 'name required' });
+  const agents = store.readAgents();
+  for (const a of agents) if ((a.group || '').trim() === from) a.group = to;
+  store.writeAgents(agents);
+  const groups = store.readGroups();
+  if (groups[from]) { groups[to] = groups[from]; delete groups[from]; }
+  store.writeGroups(groups);
+  const st = vipMonitor.status.get(from);
+  if (st) { vipMonitor.status.delete(from); vipMonitor.status.set(to, st); }
+  io.emit('agents');
+  io.emit('groups');
+  res.json({ ok: true });
 });
 
 // ---------------------------------------------------------------------------
@@ -862,6 +920,13 @@ io.use((socket, next) => {
 mp.on('log', (agentId, text) => io.emit('log', { agentId, text }));
 mp.on('agents', () => io.emit('agents'));
 mp.on('files', agentId => io.emit('files', { agentId }));
+vipMonitor.on('change', () => io.emit('groups'));
+vipMonitor.on('failover', ({ group, from, to, at }) => {
+  console.log(`[nginx-manager] VIP failover in ${group}: ${from} -> ${to}`);
+  for (const a of store.readAgents().filter(x => (x.group || '').trim() === group)) {
+    io.emit('log', { agentId: a.id, text: `🔀 VIP for ${group} moved from ${from} to ${to} at ${at}\n` });
+  }
+});
 
 io.on('connection', (socket) => {
   const authed = () => socket.request.session && socket.request.session.authenticated;
@@ -899,6 +964,8 @@ io.on('connection', (socket) => {
 app.get('*', (req, res) => {
   res.sendFile(path.join(__dirname, 'public', 'index.html'));
 });
+
+vipMonitor.start();
 
 mp.start().catch(err => {
   console.error('[nginx-manager] Failed to start agent gRPC listener:', err.message);
