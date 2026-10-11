@@ -1,5 +1,5 @@
 #!/bin/bash
-# install.sh — run as root on the nginx-manager host (Debian/Ubuntu)
+# install.sh — run as root on the nginx-manager host (Debian 12+/Ubuntu 22.04+)
 set -euo pipefail
 
 echo "=== nginx-manager installer ==="
@@ -7,7 +7,7 @@ echo "=== nginx-manager installer ==="
 APP_DIR=/opt/nginx-manager
 
 # Node.js 22 LTS
-if ! command -v node >/dev/null || [ "$(node -p 'process.versions.node.split(".")[0]')" -lt 18 ]; then
+if ! command -v node >/dev/null || [ "$(node -p 'process.versions.node.split(".")[0]')" -lt 20 ]; then
   curl -fsSL https://deb.nodesource.com/setup_22.x | bash -
   apt-get install -y nodejs
 fi

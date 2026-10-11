@@ -32,7 +32,7 @@ Built for ConnopNetworking homelab infrastructure.
 - 🎨 **Branding** — your own logo (also the browser tab icon), app name and login text; stored in `data/` so updates keep it
 - 🖥️ **Live log** — Socket.IO real-time operation output (session-authenticated)
 - 📡 **Connections** — live request log per server: client, site, request, status and upstream, with allowed / denied (401/403/407/429/444) / error counts and filters. One click adds a syslog `access_log` (`conf.d/00-nginx-manager-logging.conf`) through the agent; query strings are never logged
-- 💓 **Keepalived log** — keepalived's journal per server (MASTER/BACKUP transitions highlighted), shipped by a small systemd unit whose install script is in the Log tab
+- 💓 **Keepalived log & VIP holder** — keepalived's journal per server (MASTER/BACKUP transitions highlighted), shipped by a small systemd unit whose install script is in the Log tab. The same unit reports every 10 s which addresses each server holds and whether keepalived is running, so the group's VIP badge shows the active server (and split brain, or a member with keepalived stopped) even when the manager is on another subnet. Without it the manager falls back to matching the VIP's MAC in its own ARP table, which only works on the same L2 segment
 
 ## Architecture
 
@@ -56,7 +56,9 @@ Each agent:
 
 ### Manager
 
-Requirements: Debian/Ubuntu, Node.js 18+, `openssl`.
+Requirements: Debian 12+/Ubuntu 22.04+ for the manager, Node.js 20+, `openssl`.
+
+Managed nginx servers can run **Debian/Ubuntu or RHEL/Rocky/Alma 8+ (and Amazon Linux)** — the agent, helper and keepalived install scripts detect `apt-get` vs `dnf`/`yum`. On SELinux-enforcing hosts the helper script labels its loopback status port (`8099`) as `http_port_t`; nginx's syslog to the manager is plain UDP and needs no boolean.
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/mitchell-connop/nginx-manager/main/install.sh -o install.sh

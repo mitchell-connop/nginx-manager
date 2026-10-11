@@ -71,3 +71,35 @@ test('agent address from the gRPC peer string', () => {
   assert.equal(peerAddress(call('[2001:db8::1]:443')), '2001:db8::1');
   assert.equal(peerAddress({}), null);
 });
+
+test('keepalived reports name the holder without ARP (manager on another subnet)', () => {
+  const now = 1e12;
+  const reports = new Map([
+    ['a', { at: now - 5000, addrs: ['127.0.0.1', '192.0.2.51'], keepalived: 'active' }],
+    ['b', { at: now - 5000, addrs: ['127.0.0.1', '192.0.2.52', '192.0.2.50'], keepalived: 'active' }],
+  ]);
+  const r = resolveHolder({ vip: '192.0.2.50', vipProbe: up, arp: new Map(), members, reports, now });
+  assert.equal(r.holderName, 'lb-b');
+  assert.equal(r.source, 'keepalived');
+  assert.deepEqual(r.members, [{ name: 'lb-a', keepalived: 'active', holds: false }, { name: 'lb-b', keepalived: 'active', holds: true }]);
+});
+
+test('keepalived reports win over ARP; both holding is split brain; nobody holding is reported', () => {
+  const now = 1e12;
+  const arp = new Map([['192.0.2.50', 'aa:aa'], ['192.0.2.51', 'aa:aa']]);
+  const both = new Map([['a', { at: now, addrs: ['192.0.2.50'], keepalived: 'active' }], ['b', { at: now, addrs: ['192.0.2.50'], keepalived: 'active' }]]);
+  assert.deepEqual(resolveHolder({ vip: '192.0.2.50', vipProbe: up, arp, members, reports: both, now }).conflict, ['lb-a', 'lb-b']);
+  const none = new Map([['a', { at: now, addrs: [], keepalived: 'inactive' }]]);
+  const r = resolveHolder({ vip: '192.0.2.50', vipProbe: up, arp, members, reports: none, now });
+  assert.equal(r.holderId, null, 'a fresh report overrides the ARP guess');
+  assert.equal(r.source, 'keepalived');
+});
+
+test('stale keepalived reports fall back to ARP', () => {
+  const now = 1e12;
+  const arp = new Map([['192.0.2.50', 'aa:aa'], ['192.0.2.51', 'aa:aa']]);
+  const old = new Map([['b', { at: now - 120000, addrs: ['192.0.2.50'], keepalived: 'active' }]]);
+  const r = resolveHolder({ vip: '192.0.2.50', vipProbe: up, arp, members, reports: old, now });
+  assert.equal(r.holderName, 'lb-a');
+  assert.equal(r.source, 'arp');
+});

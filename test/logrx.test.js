@@ -49,6 +49,15 @@ test('keepalived lines keep their journal timestamp, get a level, and replays ar
   assert.strictEqual(rx.entries('a', 'keepalived').length, 2);
 });
 
+test('keepalived_state reports go to the VIP monitor, not the keepalived log', () => {
+  const rx = new lr.LogReceiver({ resolveAgent: () => 'a' });
+  const got = [];
+  rx.on('vrrp', (id, j) => got.push([id, j]));
+  assert.strictEqual(rx.receive('<13>Oct 11 06:01:00 lb-01 keepalived_state: {"v":1,"keepalived":"active","addrs":["127.0.0.1","192.0.2.50"]}', '192.0.2.1'), null);
+  assert.deepStrictEqual(got, [['a', { v: 1, keepalived: 'active', addrs: ['127.0.0.1', '192.0.2.50'] }]]);
+  assert.strictEqual(rx.entries('a', 'keepalived').length, 0);
+});
+
 test('ring buffer is bounded', () => {
   const rx = new lr.LogReceiver({ resolveAgent: () => 'a', limits: { access: 3 } });
   for (let i = 0; i < 5; i++) rx.receive(access({ ...base, r: `/${i}` }), '192.0.2.1');
@@ -90,5 +99,8 @@ test('generated nginx files', () => {
   assert.doesNotMatch(conf, /\$request\b|\$args|\$request_uri/);     // no query strings
   assert.match(inc, /access_log syslog:server=192\.0\.2\.42:5514,tag=nginx,severity=info nm_json;/);
   assert.match(lr.remoteLogFiles('/etc/nginx', '2001:db8::1')['/etc/nginx/nginx-manager/remote-log.inc'], /server=\[2001:db8::1\]:5514/);
-  assert.match(lr.keepalivedForwarderScript('192.0.2.42'), /logger --udp --rfc3164 -n 192\.0\.2\.42 -P 5514 -t keepalived/);
+  const ka = lr.keepalivedForwarderScript('192.0.2.42');
+  assert.match(ka, /nm-keepalived\.sh 192\.0\.2\.42 5514$/m);
+  assert.match(ka, /journalctl -u keepalived -f .*\| send -t keepalived$/m);
+  assert.match(ka, /send -t keepalived_state /);
 });

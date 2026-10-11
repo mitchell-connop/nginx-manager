@@ -277,10 +277,35 @@ function setupInfo(agent, req, token) {
     'set -euo pipefail',
     ...tokenLines,
     '',
-    '# 1. Install NGINX Agent v3 from the nginx.org repo (uses the existing nginx.org signing key)',
-    'echo "deb [signed-by=/usr/share/keyrings/nginx-archive-keyring.gpg] http://packages.nginx.org/nginx-agent/debian $(. /etc/os-release && echo $VERSION_CODENAME) agent" \\',
-    '  > /etc/apt/sources.list.d/nginx-agent.list',
-    'apt-get update && apt-get install -y nginx-agent',
+    '# 1. Install NGINX Agent v3 from the nginx.org packages repo (Debian/Ubuntu, or RHEL/Rocky/Alma/Amazon Linux)',
+    'if command -v apt-get >/dev/null; then',
+    '  . /etc/os-release',
+    '  case "$ID" in ubuntu) DIST=ubuntu ;; *) DIST=debian ;; esac',
+    '  KEY=/usr/share/keyrings/nginx-archive-keyring.gpg     # present if nginx itself came from nginx.org',
+    '  if [ ! -s "$KEY" ]; then',
+    '    command -v curl >/dev/null || { apt-get update -q && apt-get install -y -q curl ca-certificates; }',
+    '    install -d -m 755 /etc/apt/keyrings && KEY=/etc/apt/keyrings/nginx-agent.asc',
+    '    curl -fsSL https://nginx.org/keys/nginx_signing.key -o "$KEY"',
+    '  fi',
+    '  echo "deb [signed-by=$KEY] https://packages.nginx.org/nginx-agent/$DIST $VERSION_CODENAME agent" > /etc/apt/sources.list.d/nginx-agent.list',
+    '  apt-get update -q && apt-get install -y -q nginx-agent',
+    'elif command -v dnf >/dev/null || command -v yum >/dev/null; then',
+    '  . /etc/os-release',
+    '  REL=${VERSION_ID%%.*}',
+    '  case "$ID:$REL" in amzn:2) DIST=amzn2 ;; amzn:*) DIST=amzn ;; *) DIST=centos ;; esac',
+    "  cat > /etc/yum.repos.d/nginx-agent.repo <<EOF",
+    '[nginx-agent]',
+    'name=NGINX Agent',
+    'baseurl=https://packages.nginx.org/nginx-agent/$DIST/$REL/\\$basearch/',
+    'gpgcheck=1',
+    'enabled=1',
+    'gpgkey=https://nginx.org/keys/nginx_signing.key',
+    'module_hotfixes=true',
+    'EOF',
+    '  if command -v dnf >/dev/null; then dnf install -y nginx-agent; else yum install -y nginx-agent; fi',
+    'else',
+    '  echo "ERROR: unsupported OS (need apt-get, dnf or yum) — install nginx-agent v3 by hand, then re-run" >&2; exit 1',
+    'fi',
     '',
     '# 2. Token + manager CA',
     `install -m 600 /dev/null /etc/nginx-agent/manager.token && printf '%s' "$TOKEN" > /etc/nginx-agent/manager.token`,
@@ -594,6 +619,7 @@ app.delete('/api/agents/:id', requireAuth, (req, res) => {
   usage.forget(req.params.id);
   history.forget(req.params.id);
   healthState.forget(req.params.id);
+  vipMonitor.reports.delete(req.params.id);
   const call = mp.streams.get(req.params.id);
   if (call) { try { call.end(); } catch {} mp.streams.delete(req.params.id); }
   io.emit('agents');
@@ -2222,6 +2248,7 @@ mp.on('log', (agentId, text) => io.emit('log', { agentId, text }));
 mp.on('agents', () => io.emit('agents'));
 mp.on('files', agentId => io.emit('files', { agentId }));
 vipMonitor.on('change', () => io.emit('groups'));
+logReceiver.on('vrrp', (agentId, msg) => vipMonitor.report(agentId, msg, id => ((store.findAgent(id) || {}).group || '').trim()));
 logReceiver.on('entries', ({ agentId, kind, entries }) => io.emit('remotelog', { agentId, kind, entries }));
 cve.on('change', () => io.emit('cve'));
 certManager.on('change', id => io.emit('managedcerts', { id }));

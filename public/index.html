@@ -1249,6 +1249,8 @@
       Run as root on <strong>each</strong> nginx server. It installs a small Python service (<code>nginx-manager-helper</code>, no extra packages)
       that runs unprivileged, probes the backends listed in <code>helper.json</code>, reads the loopback-only <code>stub_status</code>, and reports to
       this manager over the same UDP port as the request log. Its target list is delivered through NGINX Agent, so config changes never need a reinstall.
+      Works on Debian/Ubuntu and RHEL/Rocky/Alma 8+; on SELinux systems it also labels the status port so nginx may listen on it —
+      run it <strong>before</strong> enabling health checks.
     </p>
     <div class="form-group"><textarea id="hl-script" class="code-editor" readonly style="min-height:300px;font-size:.76rem;border:1px solid var(--border);border-radius:var(--radius)"></textarea></div>
     <div class="modal-actions">
@@ -1333,8 +1335,9 @@
   <div class="modal modal-wide">
     <h3>Forward keepalived logs</h3>
     <p style="font-size:.84rem;color:var(--text-dim);margin-bottom:12px">
-      The agent can only manage nginx's files, so keepalived's journal is shipped by a small systemd unit.
-      Run this as root on <strong>every</strong> server in the keepalived pair. It sends UDP syslog to this manager on port <strong id="ka-port"></strong>.
+      The agent can only manage nginx's files, so keepalived's journal is shipped by a small systemd unit. Every 10 s it also
+      reports which addresses the server holds, so the group's VIP badge shows the active server even when this manager is on another subnet.
+      Run this as root on <strong>every</strong> server in the keepalived pair (Debian/Ubuntu or RHEL/Rocky/Alma). It sends UDP syslog to this manager on port <strong id="ka-port"></strong>.
     </p>
     <div class="form-group">
       <textarea id="ka-script" class="code-editor" readonly style="min-height:300px;font-size:.78rem;border:1px solid var(--border);border-radius:var(--radius)"></textarea>
@@ -1851,20 +1854,29 @@ function vipPill(gKey) {
   let cls = 'badge-info', text = `🛜 ${g.vip}`, tip = `VIP ${g.vip}:${g.port} — checking…`;
   if (st) {
     const since = st.holderSince ? ` since ${formatDate(st.holderSince)}` : '';
-    if (!st.reachable) {
+    const kaDown = (st.members || []).filter(m => m.keepalived !== 'active').map(m => `${m.name} (${m.keepalived})`);
+    const how = st.source === 'keepalived' ? 'reported by keepalived on the servers' : st.source === 'arp' ? `MAC ${st.vipMac}` : '';
+    if (st.conflict) {
+      cls = 'badge-danger'; text += ` ⚠ ${st.conflict.join(' + ')}`;
+      tip = `Split brain: ${st.conflict.join(' and ')} both hold ${g.vip}`;
+    } else if (!st.reachable && !st.holderName) {
       cls = 'badge-danger'; text += ' ✕ unreachable';
       tip = `VIP ${g.vip}:${g.port} did not answer (${st.error || 'no response'}) — checked ${formatDate(st.checkedAt)}`;
-    } else if (st.conflict) {
-      cls = 'badge-danger'; text += ` ⚠ ${st.conflict.join(' + ')}`;
-      tip = `Split brain: ${st.conflict.join(' and ')} both answer for ${g.vip}`;
     } else if (st.holderName) {
-      cls = 'badge-success'; text += ` → ${st.holderName}`;
-      tip = `VIP ${g.vip}:${g.port} held by ${st.holderName}${since} · ${st.latencyMs} ms · MAC ${st.vipMac}` +
+      cls = st.reachable && !kaDown.length ? 'badge-success' : 'badge-warn';
+      text += ` → ${st.holderName}` + (st.reachable ? '' : ' ✕ unreachable');
+      tip = `VIP ${g.vip}:${g.port} held by ${st.holderName}${since} (${how})` +
+        (st.reachable ? ` · answers in ${st.latencyMs} ms` : ` · but it did not answer the manager on port ${g.port} (${st.error || 'no response'})`) +
+        (kaDown.length ? ` · keepalived not running on ${kaDown.join(', ')} — no standby` : '') +
         (st.previousHolder ? ` · previously ${st.previousHolder}` : '') + ` · checked ${formatDate(st.checkedAt)}`;
+    } else if (st.source === 'keepalived') {
+      cls = 'badge-danger'; text += ' → nobody';
+      tip = `No server in this group has ${g.vip} on an interface` + (kaDown.length ? ` · keepalived not running on ${kaDown.join(', ')}` : '') +
+        ` · checked ${formatDate(st.checkedAt)}`;
     } else {
       cls = 'badge-warn'; text += ' → ?';
-      tip = `VIP ${g.vip}:${g.port} answers (${st.latencyMs} ms) but its MAC ${st.vipMac || '(unknown)'} doesn't match any connected server in this group` +
-        ' — the manager must be on the same subnet, and each server\'s agent connected';
+      tip = `VIP ${g.vip}:${g.port} answers (${st.latencyMs} ms) but the manager can't tell which server holds it.` +
+        ' Install the keepalived forwarder on each server (Log tab → Keepalived) — it reports the holder from any network.';
     }
   }
   return `<div style="padding:0 10px 6px 26px"><span class="badge ${cls}" title="${esc(tip)}" style="cursor:help;max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(text)}</span></div>`;
