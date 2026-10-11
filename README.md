@@ -6,7 +6,7 @@ Built for ConnopNetworking homelab infrastructure; usable anywhere you run open-
 
 - [Features](#features)
 - [Architecture](#architecture)
-- [Installation](#installation) — manager, adding nginx servers, network ports, firewall rules
+- [Installation](#installation) — manager, recommended spec, adding nginx servers, network ports, firewall rules
 - [Configuration (.env)](#configuration-env)
 - [Setup guides](#setup-guides) — how to configure each feature
 - [Notes](#notes) · [Limitations](#limitations) · [Development](#development)
@@ -101,6 +101,26 @@ node server.js
 ```
 
 **Upgrading:** `cd /opt/nginx-manager && git pull --ff-only && npm ci --omit=dev && systemctl restart nginx-manager`. A restart signs everyone out (sessions are held in memory).
+
+### Recommended VM / container spec
+
+The manager is light: one Node.js process plus certbot when a certificate renews. Measured on a production deployment managing an HA pair (Debian 13 LXC, request logging, VIP monitoring and directory sign-in enabled): **~80 MB RAM, ~0.1 % CPU at idle, `data/` under 1 MB** after the first days.
+
+| | Minimum | Recommended | Larger estates (20–50 servers, busy request logs) |
+|---|---|---|---|
+| vCPU | 1 | **2** | 2–4 |
+| RAM | 512 MB | **1–2 GB** | 2–4 GB |
+| Swap | — | 512 MB | 1 GB |
+| Disk | 4 GB | **8 GB** | 16 GB+ |
+| OS | Debian 12 / Ubuntu 22.04 | **Debian 13 / Ubuntu 24.04** | same |
+
+- **An unprivileged LXC container is fine** (that's what it's developed on) — no nesting, no special features, no host mounts. A small VM works equally well.
+- The headroom is for `npm ci` during install/upgrade (a few hundred MB briefly), certbot runs (Python, ~100 MB for a few seconds), and the in-memory request log (up to 2 000 recent requests per server, ~1 MB each).
+- **Disk growth** is bounded: per server, up to 200 config-history snapshots (content-deduplicated), usage data for 30 days (a few MB), keepalived log history and the audit log (rotated at 5 MB). Budget roughly **50–100 MB per server** worst case; most of the 8 GB is the OS. Back up `data/`.
+- Give it a **static IP** (or stable DNS name) — the agents' TLS certificate and setup scripts point at it — and put it where the servers can reach it ([firewall rules](#firewall-rules-manager-in-a-different-network--vlan)). It doesn't need to be close to the servers; latency doesn't matter.
+- One instance per estate; there's no clustering. If it is down, nginx keeps serving with its last config — you only lose management, logs and alerts until it's back.
+
+**Overhead on each nginx server** (measured): `nginx-agent` ~70 MB RAM, health helper ~13 MB, keepalived forwarder ~3 MB, all near-zero CPU. Plan about **100 MB of RAM on top of nginx itself**; the pair here runs comfortably in 2 vCPU / 1 GB LXC containers.
 
 ### Adding an nginx server
 
