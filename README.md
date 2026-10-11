@@ -148,6 +148,13 @@ Example: management VLAN `10.0.10.0/24` with the manager at `10.0.10.5`, nginx s
 
 Rules 1–2 are the only ones the nginx servers need. Rule 2 is one-way UDP: no reply is sent, so a stateful firewall needs no return rule. Nothing needs to be opened **towards** the nginx servers for management.
 
+Through a **stateful** firewall these rules are complete — every connection is opened from the allowed side, so replies ride the connection state:
+
+- **Agent (TCP 8443)** is one long-lived gRPC connection per server, opened by the server. The agent sends an HTTP/2 keepalive ping every 20 s (NGINX Agent default), so firewall idle timeouts never expire it. If a firewall does drop it, the agent reconnects by itself within seconds.
+- **Syslog (UDP 5514)** creates a short UDP state entry per server that is refreshed by every packet; nothing is ever sent back.
+- **Manager-initiated traffic** (rules 4–6) gets its replies the same way.
+- Avoid **asymmetric routing** (e.g. a server with a second NIC whose route to the manager differs from the path the firewall saw), which stateful firewalls drop. No ICMP or other return rules are required.
+
 **Don't NAT between the servers and the manager.** The manager identifies each server by the source IP it sees on the gRPC connection and accepts syslog only from those addresses. With SNAT/masquerade every server appears as the same address, so log lines, health results and VIP state can't be told apart (or are dropped). Route the VLANs instead. If the manager itself is reached through a NAT/VIP address, set `LOG_RECEIVER_HOST` (where servers send syslog) and `AGENT_CONNECT_HOST` (where agents connect) to that address.
 
 **On the manager's own host firewall** — e.g. `ufw`:
