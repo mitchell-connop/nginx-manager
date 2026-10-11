@@ -191,6 +191,32 @@
     .terminal-title { font-size: .8rem; color: var(--text-dim); margin-left: 4px; }
     .log-output { font-family: var(--mono); font-size: .82rem; line-height: 1.7; color: #c8f0d0; padding: 16px; min-height: 200px; max-height: 400px; overflow-y: auto; white-space: pre-wrap; word-break: break-all; }
 
+    /* ── REMOTE LOGS (Log tab) ── */
+    .log-subtabs { display: flex; gap: 6px; margin-bottom: 14px; flex-wrap: wrap; }
+    .log-subtab { background: var(--surface2); color: var(--text-dim); border: 1px solid var(--border); border-radius: 20px; padding: 5px 14px; font-size: .8rem; cursor: pointer; }
+    .log-subtab.active { background: rgba(0,212,170,.12); color: var(--accent); border-color: rgba(0,212,170,.4); }
+    .log-pane { display: none; } .log-pane.active { display: block; }
+    .rl-setup { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 14px 16px; margin-bottom: 14px; display: flex; align-items: center; gap: 12px; flex-wrap: wrap; font-size: .84rem; }
+    .rl-setup .grow { flex: 1; min-width: 220px; color: var(--text-dim); }
+    .rl-stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap: 10px; margin-bottom: 14px; }
+    .rl-stat { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 10px 14px; }
+    .rl-stat .n { font-size: 1.3rem; font-weight: 700; font-variant-numeric: tabular-nums; }
+    .rl-stat .l { font-size: .7rem; color: var(--text-dim); text-transform: uppercase; letter-spacing: .6px; }
+    .rl-toolbar { display: flex; gap: 8px; margin-bottom: 10px; flex-wrap: wrap; align-items: center; }
+    .rl-toolbar input, .rl-toolbar select { padding: 6px 10px; background: var(--surface2); border: 1px solid var(--border); border-radius: 8px; color: var(--text); font-size: .82rem; outline: none; }
+    .rl-toolbar input[type="checkbox"] { padding: 0; }
+    #rl-search { flex: 1; min-width: 180px; }
+    .rl-table-wrap { background: #080c14; border: 1px solid var(--border); border-radius: var(--radius); max-height: 520px; overflow: auto; }
+    table.rl-table { width: 100%; border-collapse: collapse; font-family: var(--mono); font-size: .76rem; }
+    .rl-table th { position: sticky; top: 0; background: #0e1320; color: var(--text-dim); text-align: left; font-weight: 600; padding: 7px 10px; border-bottom: 1px solid var(--border); white-space: nowrap; }
+    .rl-table td { padding: 4px 10px; border-bottom: 1px solid #141a28; vertical-align: top; white-space: nowrap; }
+    .rl-table td.req { white-space: normal; word-break: break-all; min-width: 240px; }
+    .rl-table tr.denied td { background: rgba(231,76,60,.07); }
+    .rl-table tr.server_error td { background: rgba(245,166,35,.06); }
+    .rl-st { font-weight: 700; } .rl-st.allowed { color: var(--success); } .rl-st.denied { color: var(--danger); }
+    .rl-st.client_error { color: var(--text-dim); } .rl-st.server_error { color: var(--warn); }
+    .ka-line { display: block; } .ka-line .ts { color: var(--text-dim); } .ka-line.master { color: var(--success); } .ka-line.warn { color: var(--warn); } .ka-line.backup { color: var(--accent2); }
+
     /* ── STATUS ── */
     .status-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 14px; margin-bottom: 20px; }
     .stat-card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 18px; }
@@ -429,13 +455,56 @@
 
         <!-- ── LOG TAB ── -->
         <div class="tab-content" id="tab-terminal">
-          <div class="terminal-wrap">
-            <div class="terminal-bar">
-              <div class="t-dot t-red"></div><div class="t-dot t-yellow"></div><div class="t-dot t-green"></div>
-              <span class="terminal-title">Operation Log</span>
-              <button class="btn-secondary btn-sm" style="margin-left:auto" onclick="clearLog()">Clear</button>
+          <div class="log-subtabs">
+            <button class="log-subtab active" data-pane="ops" onclick="switchLogPane('ops')">Operations</button>
+            <button class="log-subtab" data-pane="access" onclick="switchLogPane('access')">Connections</button>
+            <button class="log-subtab" data-pane="keepalived" onclick="switchLogPane('keepalived')">Keepalived</button>
+          </div>
+
+          <div class="log-pane active" id="logpane-ops">
+            <div class="terminal-wrap">
+              <div class="terminal-bar">
+                <div class="t-dot t-red"></div><div class="t-dot t-yellow"></div><div class="t-dot t-green"></div>
+                <span class="terminal-title">Operation Log</span>
+                <button class="btn-secondary btn-sm" style="margin-left:auto" onclick="clearLog()">Clear</button>
+              </div>
+              <pre class="log-output" id="log-output">$ Waiting for operations...\n</pre>
             </div>
-            <pre class="log-output" id="log-output">$ Waiting for operations...\n</pre>
+          </div>
+
+          <div class="log-pane" id="logpane-access">
+            <div class="rl-setup" id="rl-access-setup"></div>
+            <div class="rl-stats" id="rl-stats"></div>
+            <div class="rl-toolbar">
+              <select id="rl-filter" onchange="renderAccess()">
+                <option value="">All requests</option>
+                <option value="allowed">Allowed (1xx–3xx)</option>
+                <option value="denied">Denied (401/403/407/429/444)</option>
+                <option value="client_error">Other 4xx</option>
+                <option value="server_error">Errors (5xx)</option>
+              </select>
+              <input id="rl-search" placeholder="Filter by client, host, path, upstream…" oninput="renderAccessDebounced()" />
+              <label style="font-size:.8rem;color:var(--text-dim);display:flex;align-items:center;gap:5px"><input type="checkbox" id="rl-pause" onchange="if(!this.checked) renderAccess()" /> Pause</label>
+              <button class="btn-secondary btn-sm" onclick="clearRemoteLog('access')">Clear</button>
+            </div>
+            <div class="rl-table-wrap">
+              <table class="rl-table">
+                <thead><tr><th>Time</th><th>Client</th><th>Host</th><th>Request</th><th>Status</th><th>Upstream</th><th>Time (s)</th><th>Bytes</th></tr></thead>
+                <tbody id="rl-rows"></tbody>
+              </table>
+            </div>
+            <div class="form-hint" style="margin-top:6px">Newest first. Query strings are not logged. Shows the last 2,000 requests received since the manager started.</div>
+          </div>
+
+          <div class="log-pane" id="logpane-keepalived">
+            <div class="rl-setup" id="rl-ka-setup"></div>
+            <div class="terminal-wrap">
+              <div class="terminal-bar">
+                <div class="t-dot t-green"></div><span class="terminal-title">keepalived</span>
+                <button class="btn-secondary btn-sm" style="margin-left:auto" onclick="clearRemoteLog('keepalived')">Clear</button>
+              </div>
+              <pre class="log-output" id="ka-output" style="max-height:520px"></pre>
+            </div>
           </div>
         </div>
 
@@ -953,6 +1022,24 @@
 
 <div id="toast-container"></div>
 
+<!-- ── KEEPALIVED LOG FORWARDER MODAL ── -->
+<div class="modal-backdrop" id="ka-modal">
+  <div class="modal modal-wide">
+    <h3>Forward keepalived logs</h3>
+    <p style="font-size:.84rem;color:var(--text-dim);margin-bottom:12px">
+      The agent can only manage nginx's files, so keepalived's journal is shipped by a small systemd unit.
+      Run this as root on <strong>every</strong> server in the keepalived pair. It sends UDP syslog to this manager on port <strong id="ka-port"></strong>.
+    </p>
+    <div class="form-group">
+      <textarea id="ka-script" class="code-editor" readonly style="min-height:300px;font-size:.78rem;border:1px solid var(--border);border-radius:var(--radius)"></textarea>
+    </div>
+    <div class="modal-actions">
+      <button class="btn-secondary" onclick="copyText('ka-script')">📋 Copy Script</button>
+      <button class="btn-primary" onclick="document.getElementById('ka-modal').classList.remove('open')">Done</button>
+    </div>
+  </div>
+</div>
+
 <!-- ══════════════════════ SCRIPT ══════════════════════ -->
 <script>
 // ─── STATE ───────────────────────────────────────────
@@ -993,6 +1080,7 @@ function initSocket() {
   S.socket.on('log', ({ agentId, text }) => { if (agentId === S.currentAgentId) appendLog(text); });
   S.socket.on('done', data => {
     if (data.op === 'apply' || data.op === 'sync') loadAgents();
+    if (data.op === 'apply' && data.agentId === S.rl.loadedFor) loadRemoteLogs();
     if (data.agentId !== S.currentAgentId) return;
     if (data.op === 'status') return;
     if (data.success) toast(`✅ ${data.op === 'apply' ? 'Applied' : 'Done'}${data.output ? ' — ' + data.output : ''}`, 'success');
@@ -1000,6 +1088,7 @@ function initSocket() {
     enableButtons();
   });
   S.socket.on('agents', debounce(loadAgents, 300));
+  S.socket.on('remotelog', onRemoteLog);
   S.socket.on('branding', loadBranding);
   S.socket.on('groups', debounce(async () => { await loadGroups(); renderAgentList(); }, 300));
   S.socket.on('managedcerts', debounce(() => { if (S.currentAgentId) loadCerts(); }, 300));
@@ -1225,6 +1314,7 @@ async function selectAgent(id) {
   renderAgentHeader();
   document.getElementById('editor-section').style.display = 'none';
   clearLog();
+  resetRemoteLogs();
   switchTab('builder');
   await Promise.all([loadSites(), loadCerts(), loadConfigs(), loadForwardProxies()]);
 }
@@ -2523,7 +2613,7 @@ function doApply() {
   if (!S.currentAgentId) return;
   const a = currentAgent();
   if (!a?.pendingChanges && !confirm('No pending changes. Re-apply the current config anyway?')) return;
-  switchTab('terminal'); clearLog(); disableButtons();
+  switchLogPane('ops'); switchTab('terminal'); clearLog(); disableButtons();
   S.socket.emit('apply', { agentId: S.currentAgentId });
 }
 async function doDiscard() {
@@ -2566,11 +2656,173 @@ async function pushCurrentFile() {
 function switchTab(name) {
   document.querySelectorAll('.tab-btn').forEach(b => b.classList.toggle('active', b.dataset.tab === name));
   document.querySelectorAll('.tab-content').forEach(t => t.classList.toggle('active', t.id === 'tab-' + name));
+  if (name === 'terminal' && S.logPane !== 'ops') loadRemoteLogs();
 }
 
 // ─── LOG ──────────────────────────────────────────────
 function appendLog(t) { const el = document.getElementById('log-output'); el.textContent += t; el.scrollTop = el.scrollHeight; }
 function clearLog() { document.getElementById('log-output').textContent = ''; }
+
+// ─── REMOTE LOGS (Connections / Keepalived) ───────────
+S.logPane = 'ops';
+S.rl = { access: [], keepalived: [], status: null, loadedFor: null };
+const RL_MAX = 2000;
+
+function switchLogPane(name) {
+  S.logPane = name;
+  document.querySelectorAll('.log-subtab').forEach(b => b.classList.toggle('active', b.dataset.pane === name));
+  document.querySelectorAll('.log-pane').forEach(p => p.classList.toggle('active', p.id === 'logpane-' + name));
+  if (name !== 'ops') loadRemoteLogs();
+}
+
+function resetRemoteLogs() {
+  S.rl = { access: [], keepalived: [], status: null, loadedFor: null };
+  if (S.logPane !== 'ops') switchLogPane('ops');
+}
+
+async function loadRemoteLogs(force) {
+  const id = S.currentAgentId;
+  if (!id) return;
+  const [status, acc, ka] = await Promise.all([
+    apiFetch(`/api/agents/${id}/remote-logs`),
+    S.rl.loadedFor === id && !force ? null : apiFetch(`/api/agents/${id}/logs?kind=access&limit=${RL_MAX}`),
+    S.rl.loadedFor === id && !force ? null : apiFetch(`/api/agents/${id}/logs?kind=keepalived&limit=500`),
+  ]);
+  if (id !== S.currentAgentId) return;
+  if (status) S.rl.status = status;
+  if (acc) S.rl.access = acc.entries || [];
+  if (ka) S.rl.keepalived = ka.entries || [];
+  S.rl.loadedFor = id;
+  renderRemoteLogSetup(); renderAccess(); renderKeepalived();
+}
+
+function onRemoteLog({ agentId, kind, entries }) {
+  if (agentId !== S.currentAgentId || S.rl.loadedFor !== agentId) return;
+  const list = S.rl[kind];
+  if (!list) return;
+  list.push(...entries);
+  if (list.length > RL_MAX) list.splice(0, list.length - RL_MAX);
+  if (S.rl.status) S.rl.status.stats[kind] = { count: list.length, lastAt: new Date().toISOString() };
+  if (kind === 'access') { renderAccessStats(); if (!document.getElementById('rl-pause').checked) renderAccess(); }
+  else renderKeepalived();
+}
+
+function rlAgo(iso) {
+  if (!iso) return 'never';
+  const s = Math.round((Date.now() - new Date(iso)) / 1000);
+  return s < 60 ? `${s}s ago` : s < 3600 ? `${Math.round(s / 60)}m ago` : formatDate(iso);
+}
+
+function renderRemoteLogSetup() {
+  const st = S.rl.status;
+  const a = currentAgent();
+  const acc = document.getElementById('rl-access-setup');
+  const ka = document.getElementById('rl-ka-setup');
+  if (!st || !a) { acc.innerHTML = ka.innerHTML = ''; return; }
+  if (!st.available) {
+    acc.innerHTML = ka.innerHTML = '<span class="grow">The log receiver is disabled on this manager (<code>LOG_RECEIVER_PORT=off</code>).</span>';
+    return;
+  }
+  const last = st.stats.access.lastAt;
+  let state, btns;
+  if (st.enabled && st.pending) {
+    state = '🟡 Request logging is staged but not applied yet.';
+    btns = `<button class="btn-primary btn-sm" onclick="doApply()">🚀 Apply</button><button class="btn-secondary btn-sm" onclick="setRemoteLogging(false)">Cancel</button>`;
+  } else if (st.enabled) {
+    state = `🟢 nginx streams its request log to <span class="mono">${esc(st.receiver)}:${st.port}</span> (udp) — last entry ${esc(rlAgo(last))}.` +
+      (st.upToDate ? '' : ' <strong style="color:var(--warn)">The receiver address has changed — re-enable to update it.</strong>');
+    btns = `${st.upToDate ? '' : '<button class="btn-primary btn-sm" onclick="setRemoteLogging(true, true)">Update</button>'}<button class="btn-secondary btn-sm" onclick="setRemoteLogging(false, true)">Disable</button>`;
+  } else if (st.pending) {
+    state = '🟡 Disabling request logging is staged but not applied yet.';
+    btns = `<button class="btn-primary btn-sm" onclick="doApply()">🚀 Apply</button>`;
+  } else {
+    state = `⚪ Not enabled. Adds a syslog <code>access_log</code> (<span class="mono">${esc(st.files.conf)}</span>) so every request this server handles shows up here — who connected, to which site, and whether it was allowed. The local access.log is unchanged.`;
+    btns = `<button class="btn-primary btn-sm" onclick="setRemoteLogging(true, true)">Enable &amp; apply</button>`;
+  }
+  acc.innerHTML = `<span class="grow">${state}${a.group ? ` <br><span style="font-size:.78rem">Each server is separate — enable it on every member of <strong>${esc(a.group)}</strong>.</span>` : ''}</span>${btns}`;
+
+  const kl = st.stats.keepalived.lastAt;
+  ka.innerHTML = `<span class="grow">${S.rl.keepalived.length
+      ? `🟢 Receiving keepalived logs — last entry ${esc(rlAgo(kl))}.`
+      : `⚪ No keepalived logs received from ${esc(a.name)} yet. Install the forwarder on each keepalived server.`}</span>
+    <button class="btn-${S.rl.keepalived.length ? 'secondary' : 'primary'} btn-sm" onclick="showKeepalivedSetup()">Forwarder setup</button>`;
+}
+
+async function setRemoteLogging(enabled, apply) {
+  const res = await apiFetch(`/api/agents/${S.currentAgentId}/remote-logs`, { method: 'POST', body: JSON.stringify({ enabled }) });
+  if (!res || res.error) { toast(res?.error || 'Request failed', 'error'); return; }
+  S.rl.status = res;
+  renderRemoteLogSetup();
+  if (apply) { await loadAgents(); doApply(); }
+}
+
+function showKeepalivedSetup() {
+  const st = S.rl.status;
+  if (!st || !st.keepalivedScript) { toast("Can't work out this manager's address — set LOG_RECEIVER_HOST", 'error'); return; }
+  document.getElementById('ka-script').value = st.keepalivedScript;
+  document.getElementById('ka-port').textContent = `${st.port}/udp`;
+  document.getElementById('ka-modal').classList.add('open');
+}
+
+async function clearRemoteLog(kind) {
+  await apiFetch(`/api/agents/${S.currentAgentId}/logs?kind=${kind}`, { method: 'DELETE' });
+  S.rl[kind] = [];
+  if (kind === 'access') renderAccess(); else renderKeepalived();
+}
+
+function renderAccessStats() {
+  const list = S.rl.access;
+  const c = { allowed: 0, denied: 0, client_error: 0, server_error: 0 };
+  const cutoff = Date.now() - 60000;
+  let lastMin = 0;
+  const clients = new Set();
+  for (const e of list) { c[e.result] = (c[e.result] || 0) + 1; clients.add(e.client); if (new Date(e.at) >= cutoff) lastMin++; }
+  const stat = (n, l, color) => `<div class="rl-stat"><div class="n" style="color:${color}">${n.toLocaleString()}</div><div class="l">${l}</div></div>`;
+  document.getElementById('rl-stats').innerHTML =
+    stat(list.length, 'Requests', 'var(--text)') + stat(lastMin, 'Last minute', 'var(--accent2)') +
+    stat(c.allowed, 'Allowed', 'var(--success)') + stat(c.denied, 'Denied', 'var(--danger)') +
+    stat(c.client_error, 'Other 4xx', 'var(--text-dim)') + stat(c.server_error, '5xx errors', 'var(--warn)') +
+    stat(clients.size, 'Clients', 'var(--accent)');
+}
+
+function renderAccess() {
+  renderAccessStats();
+  const f = document.getElementById('rl-filter').value;
+  const q = document.getElementById('rl-search').value.trim().toLowerCase();
+  const rows = [];
+  for (let i = S.rl.access.length - 1; i >= 0 && rows.length < 500; i--) {
+    const e = S.rl.access[i];
+    if (f && e.result !== f) continue;
+    if (q && ![e.client, e.host, e.uri, e.upstream, e.user, e.method, String(e.status)].some(v => v && String(v).toLowerCase().includes(q))) continue;
+    const t = new Date(e.at);
+    const req = `${e.method} ${e.method === 'CONNECT' ? '' : esc(e.uri)}${e.protocol ? ` <span style="color:var(--text-dim)">${esc(e.protocol)}</span>` : ''}`;
+    rows.push(`<tr class="${e.result}" title="${esc(e.userAgent || '')}">
+      <td>${esc(isNaN(t) ? e.at : t.toLocaleTimeString())}</td>
+      <td>${esc(e.client)}${e.user ? ` <span style="color:var(--accent2)">(${esc(e.user)})</span>` : ''}</td>
+      <td>${esc(e.host)}${e.port && !['80', '443'].includes(e.port) ? `<span style="color:var(--text-dim)">:${esc(e.port)}</span>` : ''}</td>
+      <td class="req">${req}</td>
+      <td><span class="rl-st ${e.result}">${e.status}</span></td>
+      <td>${esc(e.upstream || '—')}${e.upstreamStatus && e.upstreamStatus !== String(e.status) ? ` <span style="color:var(--text-dim)">(${esc(e.upstreamStatus)})</span>` : ''}</td>
+      <td>${e.time == null ? '' : e.time.toFixed(3)}</td>
+      <td>${formatBytes(e.bytes)}</td></tr>`);
+  }
+  const st = S.rl.status;
+  document.getElementById('rl-rows').innerHTML = rows.join('') ||
+    `<tr><td colspan="8" style="text-align:center;padding:30px;color:var(--text-dim);white-space:normal">${
+      S.rl.access.length ? 'No requests match the filter.' : st && st.enabled && !st.pending ? 'Waiting for requests…' : 'Enable request logging above to see connections.'}</td></tr>`;
+}
+const renderAccessDebounced = debounce(renderAccess, 200);
+
+function renderKeepalived() {
+  renderRemoteLogSetup();
+  const el = document.getElementById('ka-output');
+  const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 40;
+  el.innerHTML = S.rl.keepalived.map(e => {
+    const t = new Date(e.at);
+    return `<span class="ka-line ${e.level}"><span class="ts">${esc(isNaN(t) ? e.at : t.toLocaleString())}</span> ${esc(e.process)}: ${esc(e.text)}</span>`;
+  }).join('') || '<span style="color:var(--text-dim)">No keepalived log entries yet.</span>';
+  if (atBottom) el.scrollTop = el.scrollHeight;
+}
 
 // ─── TOAST ────────────────────────────────────────────
 function toast(msg, type = 'info') {

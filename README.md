@@ -20,6 +20,8 @@ Built for ConnopNetworking homelab infrastructure.
 - 📊 **Status** — agent connection, nginx version and instance health
 - 🎨 **Branding** — your own logo (also the browser tab icon), app name and login text; stored in `data/` so updates keep it
 - 🖥️ **Live log** — Socket.IO real-time operation output (session-authenticated)
+- 📡 **Connections** — live request log per server: client, site, request, status and upstream, with allowed / denied (401/403/407/429/444) / error counts and filters. One click adds a syslog `access_log` (`conf.d/00-nginx-manager-logging.conf`) through the agent; query strings are never logged
+- 💓 **Keepalived log** — keepalived's journal per server (MASTER/BACKUP transitions highlighted), shipped by a small systemd unit whose install script is in the Log tab
 
 ## Architecture
 
@@ -74,7 +76,8 @@ node server.js
 
 Lost the token? **🔑 Agent Setup → New Token** issues a new one (the old one stops working immediately).
 
-Make sure the nginx servers can reach the manager on `GRPC_PORT` (default 8443/tcp).
+Make sure the nginx servers can reach the manager on `GRPC_PORT` (default 8443/tcp), and on `LOG_RECEIVER_PORT`
+(default 5514/udp) if you use the Connections / Keepalived logs.
 
 ## Configuration
 
@@ -89,6 +92,8 @@ Edit `.env` (see `.env.example`):
 | `AGENT_CONNECT_HOST` | browser hostname | Host/IP agents use to reach the manager (used in setup instructions) |
 | `GRPC_TLS_SANS` | hostname + IPv4s | Names/IPs in the generated gRPC certificate, e.g. `DNS:nginx-manager.lan,IP:172.16.40.10` |
 | `GRPC_TLS_CERT` / `GRPC_TLS_KEY` / `GRPC_TLS_CA` | — | Use your own certificate instead |
+| `LOG_RECEIVER_PORT` | `5514` | UDP syslog port for the Log tab's Connections / Keepalived views; `off` disables it. Packets are only accepted from enrolled agents' addresses |
+| `LOG_RECEIVER_HOST` | auto | Address the servers send syslog to (default: the manager's local address on the route to each server) |
 | `COOKIE_SECURE` / `TRUST_PROXY` | — | Set when serving the UI over HTTPS behind a proxy |
 
 ## Notes

@@ -50,12 +50,16 @@ const { CertManager } = require('./lib/certmanager');
 const issuers = require('./lib/issuers');
 const fwdproxy = require('./lib/fwdproxy');
 const branding = require('./lib/branding');
+const logrx = require('./lib/logrx');
+const dgram = require('dgram');
 
 // ---------------------------------------------------------------------------
 // Config
 // ---------------------------------------------------------------------------
 const PORT           = process.env.PORT || 3000;
 const GRPC_PORT      = parseInt(process.env.GRPC_PORT || '8443', 10);
+// UDP syslog receiver for the Log tab (nginx request log + keepalived); "off" disables it
+const LOG_PORT       = process.env.LOG_RECEIVER_PORT === 'off' ? null : parseInt(process.env.LOG_RECEIVER_PORT || String(logrx.DEFAULT_PORT), 10);
 const SESSION_SECRET = process.env.SESSION_SECRET;
 const ADMIN_PASS     = process.env.ADMIN_PASSWORD;
 
@@ -98,6 +102,20 @@ for (const [name, value] of [['ADMIN_PASSWORD', ADMIN_PASS], ['SESSION_SECRET', 
 const tls = ensureTls(path.join(store.DATA_DIR, 'tls'));
 const mp  = new ManagementPlane({ tls, port: GRPC_PORT });
 const certManager = new CertManager({ mp });
+
+// Syslog packets are attributed by source address (the address each agent connects from)
+let addrCache = { at: 0, map: new Map() };
+function agentIdByAddress(address) {
+  if (Date.now() - addrCache.at > 5000) {
+    addrCache = { at: Date.now(), map: new Map(store.readAgents().filter(a => a.address).map(a => [a.address, a.id])) };
+  }
+  return addrCache.map.get(address) || null;
+}
+const logReceiver = new logrx.LogReceiver({
+  port: LOG_PORT || 0,
+  resolveAgent: agentIdByAddress,
+  persistDir: path.join(store.DATA_DIR, 'logs'),
+});
 
 // Multer — cert file uploads (PEM/CRT/KEY, max 1 MB each), kept in memory
 const certUpload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 1 * 1024 * 1024 } });
@@ -708,6 +726,85 @@ app.delete('/api/agents/:id/certs', requireAuth, (req, res) => {
 });
 
 // ---------------------------------------------------------------------------
+// Remote logs — request log streamed by nginx (syslog), keepalived via a forwarder unit
+// ---------------------------------------------------------------------------
+// The manager address an agent should send syslog to: LOG_RECEIVER_HOST, else the local
+// address the kernel would use to reach that agent (no packet is sent).
+function receiverAddressFor(agent) {
+  if (process.env.LOG_RECEIVER_HOST) return Promise.resolve(process.env.LOG_RECEIVER_HOST);
+  if (!agent.address) return Promise.resolve(process.env.AGENT_CONNECT_HOST || null);
+  return new Promise(resolve => {
+    const sock = dgram.createSocket(agent.address.includes(':') ? 'udp6' : 'udp4');
+    const done = v => { try { sock.close(); } catch {} resolve(v); };
+    sock.on('error', () => done(process.env.AGENT_CONNECT_HOST || null));
+    sock.connect(9, agent.address, () => done(sock.address().address));
+  });
+}
+
+async function remoteLogStatus(agent) {
+  const st = store.readState(agent.id);
+  const desired = store.desiredFiles(st);
+  const paths = logrx.remoteLogPaths(nginxDir(agent));
+  const receiver = await receiverAddressFor(agent);
+  const want = receiver && LOG_PORT ? logrx.remoteLogFiles(nginxDir(agent), receiver, LOG_PORT) : null;
+  const enabled = !!desired[paths.conf];
+  const statuses = [paths.conf, paths.inc].map(p => (desired[p] ? fileStatus(st, p) : (st.draft[p] && st.draft[p].deleted ? 'deleted' : null)));
+  return {
+    available: !!LOG_PORT,
+    port: LOG_PORT,
+    receiver,
+    enabled,
+    pending: statuses.some(x => x && x !== 'live'),
+    upToDate: !enabled || !want || Object.entries(want).every(([p, text]) => readFileContent(st, p) === text),
+    files: paths,
+    keepalivedScript: receiver && LOG_PORT ? logrx.keepalivedForwarderScript(receiver, LOG_PORT) : null,
+    stats: logReceiver.stats(agent.id),
+  };
+}
+
+app.get('/api/agents/:id/remote-logs', requireAuth, async (req, res) => {
+  const agent = requireAgent(req, res); if (!agent) return;
+  res.json(await remoteLogStatus(agent));
+});
+
+// Stages (or removes) the nginx logging files; the UI then applies them like any other edit.
+app.post('/api/agents/:id/remote-logs', requireAuth, async (req, res) => {
+  const agent = requireAgent(req, res); if (!agent) return;
+  if (!LOG_PORT) return res.status(409).json({ error: 'The log receiver is disabled (LOG_RECEIVER_PORT=off)' });
+  const dir = nginxDir(agent);
+  const paths = logrx.remoteLogPaths(dir);
+  const st = store.readState(agent.id);
+  if (req.body && req.body.enabled) {
+    const receiver = await receiverAddressFor(agent);
+    if (!receiver) return res.status(409).json({ error: "Can't work out the manager's address for this server — set LOG_RECEIVER_HOST" });
+    for (const [p, text] of Object.entries(logrx.remoteLogFiles(dir, receiver, LOG_PORT))) {
+      if (readFileContent(st, p) !== text) store.stageFile(agent.id, p, text);
+    }
+  } else {
+    for (const p of [paths.conf, paths.inc]) {
+      if (store.currentFile(st, p)) store.stageDelete(agent.id, p);
+      else if (st.draft[p]) { const s2 = store.readState(agent.id); delete s2.draft[p]; store.writeState(agent.id, s2); }
+    }
+  }
+  io.emit('files', { agentId: agent.id });
+  io.emit('agents');
+  res.json(await remoteLogStatus(agent));
+});
+
+app.get('/api/agents/:id/logs', requireAuth, (req, res) => {
+  const agent = requireAgent(req, res); if (!agent) return;
+  const kind = req.query.kind === 'keepalived' ? 'keepalived' : 'access';
+  const limit = Math.min(parseInt(req.query.limit, 10) || 1000, 5000);
+  res.json({ kind, entries: logReceiver.entries(agent.id, kind, limit), stats: logReceiver.stats(agent.id) });
+});
+
+app.delete('/api/agents/:id/logs', requireAuth, (req, res) => {
+  const agent = requireAgent(req, res); if (!agent) return;
+  logReceiver.clear(agent.id, req.query.kind === 'keepalived' ? 'keepalived' : 'access');
+  res.json({ ok: true });
+});
+
+// ---------------------------------------------------------------------------
 // Forward proxies (CONNECT tunnels, ngx_http_tunnel_module) — nginx 1.31.0+
 // ---------------------------------------------------------------------------
 function forwardProxiesPath(agent) { return path.posix.join(confDir(agent), 'forward-proxies.conf'); }
@@ -1192,6 +1289,7 @@ mp.on('log', (agentId, text) => io.emit('log', { agentId, text }));
 mp.on('agents', () => io.emit('agents'));
 mp.on('files', agentId => io.emit('files', { agentId }));
 vipMonitor.on('change', () => io.emit('groups'));
+logReceiver.on('entries', ({ agentId, kind, entries }) => io.emit('remotelog', { agentId, kind, entries }));
 certManager.on('change', id => io.emit('managedcerts', { id }));
 certManager.on('log', (id, line) => io.emit('certlog', { id, line }));
 vipMonitor.on('failover', ({ group, from, to, at }) => {
@@ -1240,6 +1338,11 @@ app.get('*', (req, res) => {
 
 vipMonitor.start();
 certManager.start();
+if (LOG_PORT) {
+  logReceiver.start()
+    .then(p => console.log(`[nginx-manager] log receiver listening on udp/${p}`))
+    .catch(err => console.error(`[nginx-manager] log receiver failed to start on udp/${LOG_PORT}: ${err.message}`));
+}
 
 mp.start().catch(err => {
   console.error('[nginx-manager] Failed to start agent gRPC listener:', err.message);

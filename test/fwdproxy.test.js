@@ -99,3 +99,14 @@ test('second proxy gets its own variables; same listen is rejected; remove', () 
   assert.equal(r.conf, a);
   assert.equal(r.authFile, '');
 });
+
+test('forward proxies include the remote request log and do not duplicate it on edit', () => {
+  const p = fp.plan('', { fields: base, nginxDir: '/etc/nginx' });
+  assert.match(p.conf, /include \/etc\/nginx\/nginx-manager\/remote-log\[\.\]inc;/);
+  const cur = fp.findForwardProxies(p.conf)[0];
+  assert.deepStrictEqual(cur.extraDirectives, []);
+  const again = fp.plan(p.conf, { key: cur.key, nginxDir: '/etc/nginx', fields: { ...cur, idleTimeout: 600 } }).conf;
+  assert.strictEqual(again.match(/remote-log/g).length, 1);
+  const off = fp.plan('', { fields: { ...base, accessLog: false }, nginxDir: '/etc/nginx' }).conf;
+  assert.doesNotMatch(off, /remote-log/);
+});
