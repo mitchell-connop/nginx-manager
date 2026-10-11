@@ -217,6 +217,10 @@
     .rl-st.client_error { color: var(--text-dim); } .rl-st.server_error { color: var(--warn); }
     .ka-line { display: block; } .ka-line .ts { color: var(--text-dim); } .ka-line.master { color: var(--success); } .ka-line.warn { color: var(--warn); } .ka-line.backup { color: var(--accent2); }
 
+    /* ── ROLES ── */
+    body.role-viewer .op-only { display: none !important; }
+    body:not(.role-admin) .admin-only { display: none !important; }
+
     /* ── USAGE ── */
     .uv-filters { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-bottom: 16px; }
     .seg { display: inline-flex; background: var(--surface2); border: 1px solid var(--border); border-radius: 8px; padding: 2px; }
@@ -383,7 +387,9 @@
     <div class="logo" id="brand-login-logo">⚙️</div>
     <h1 id="brand-login-title">Nginx Manager</h1>
     <p id="brand-login-text">Nginx config control</p>
-    <input type="password" id="login-pass" placeholder="Admin password"
+    <input type="text" id="login-user" placeholder="Username" value="admin" autocomplete="username" autocapitalize="none"
+      onkeydown="if(event.key==='Enter')document.getElementById('login-pass').focus()" style="margin-bottom:10px" />
+    <input type="password" id="login-pass" placeholder="Password" autocomplete="current-password"
       onkeydown="if(event.key==='Enter')doLogin()" />
     <div class="login-error" id="login-error"></div>
     <button class="btn-primary" style="width:100%;justify-content:center;padding:12px" onclick="doLogin()">
@@ -398,8 +404,10 @@
     <div class="header-brand"><span id="brand-header-logo">⚙️</span><span id="brand-header-title">Nginx Manager</span></div>
     <div class="header-actions">
       <span style="font-size:.8rem;color:var(--text-dim)" id="agent-count-label"></span>
-      <button class="btn-secondary btn-sm" onclick="openAddAgent()">＋ Add Server</button>
-      <button class="btn-secondary btn-sm" onclick="openBranding()" title="Logo, app name and login text">🎨 Branding</button>
+      <button class="btn-secondary btn-sm admin-only" onclick="openAddAgent()">＋ Add Server</button>
+      <button class="btn-secondary btn-sm admin-only" onclick="openBranding()" title="Logo, app name and login text">🎨 Branding</button>
+      <button class="btn-secondary btn-sm" onclick="openSettings()" title="Your account, users, alerts, audit log">⚙ Settings</button>
+      <span id="me-label" style="font-size:.78rem;color:var(--text-dim)"></span>
       <button class="btn-secondary btn-sm" onclick="doLogout()">🚪 Logout</button>
     </div>
   </header>
@@ -432,13 +440,13 @@
             <p id="panel-agent-host">hostname</p>
           </div>
           <div class="action-bar">
-            <button class="btn-primary btn-sm" id="btn-apply"    onclick="doApply()" title="Push pending changes: the agent writes them, runs nginx -t, reloads, and rolls back on failure">📤 Apply</button>
-            <button class="btn-warn btn-sm"    id="btn-discard"  onclick="doDiscard()">↶ Discard</button>
-            <button class="btn-success btn-sm" id="btn-sync"     onclick="doSync()" title="Re-upload config files from the agent">🔄 Sync</button>
+            <button class="btn-primary btn-sm op-only" id="btn-apply"    onclick="doApply()" title="Push pending changes: the agent writes them, runs nginx -t, reloads, and rolls back on failure">📤 Apply</button>
+            <button class="btn-warn btn-sm op-only"    id="btn-discard"  onclick="doDiscard()">↶ Discard</button>
+            <button class="btn-success btn-sm op-only" id="btn-sync"     onclick="doSync()" title="Re-upload config files from the agent">🔄 Sync</button>
             <button class="btn-secondary btn-sm" id="btn-status" onclick="doStatus()">📊 Status</button>
-            <button class="btn-secondary btn-sm" onclick="openSetup()">🔑 Agent Setup</button>
-            <button class="btn-secondary btn-sm" onclick="openEditAgent()">✏️ Edit</button>
-            <button class="btn-danger btn-sm"  onclick="deleteCurrentAgent()">🗑 Remove</button>
+            <button class="btn-secondary btn-sm admin-only" onclick="openSetup()">🔑 Agent Setup</button>
+            <button class="btn-secondary btn-sm op-only" onclick="openEditAgent()">✏️ Edit</button>
+            <button class="btn-danger btn-sm admin-only"  onclick="deleteCurrentAgent()">🗑 Remove</button>
           </div>
         </div>
 
@@ -447,6 +455,8 @@
           <button class="tab-btn"         data-tab="certs">🔐 Certificates</button>
           <button class="tab-btn"         data-tab="configs">📄 Raw Configs</button>
           <button class="tab-btn"         data-tab="terminal">🖥️ Log</button>
+          <button class="tab-btn"         data-tab="health">❤️ Health</button>
+          <button class="tab-btn"         data-tab="history">🕘 History</button>
           <button class="tab-btn"         data-tab="usage">📈 Usage</button>
           <button class="tab-btn"         data-tab="cve">🛡️ CVEs <span id="cve-tab-badge"></span></button>
           <button class="tab-btn"         data-tab="status">📊 Status</button>
@@ -457,21 +467,21 @@
           <div class="section-header">
             <span class="section-title">Sites</span>
             <div style="display:flex;gap:8px">
-              <button class="btn-secondary btn-sm" onclick="openSiteModal()" title="Static site or redirect (own generated file)">＋ Static / Redirect</button>
-              <button class="btn-primary btn-sm"   onclick="openProxyModal()">＋ Add Reverse Proxy</button>
+              <button class="op-only btn-secondary btn-sm" onclick="openSiteModal()" title="Static site or redirect (own generated file)">＋ Static / Redirect</button>
+              <button class="op-only btn-primary btn-sm"   onclick="openProxyModal()">＋ Add Reverse Proxy</button>
             </div>
           </div>
           <div class="sites-grid" id="sites-grid"></div>
 
           <div class="section-header" style="margin-top:26px">
             <span class="section-title">Forward proxies <span class="badge badge-info" id="fp-req" style="margin-left:6px;text-transform:none;letter-spacing:0"></span></span>
-            <button class="btn-primary btn-sm" id="fp-add" onclick="openFwdModal()">＋ Add Forward Proxy</button>
+            <button class="op-only btn-primary btn-sm" id="fp-add" onclick="openFwdModal()">＋ Add Forward Proxy</button>
           </div>
           <div class="sites-grid" id="fp-grid"></div>
 
           <div class="section-header" style="margin-top:26px">
             <span class="section-title">RTSP streams</span>
-            <button class="btn-primary btn-sm" onclick="openStreamModal()">＋ Add RTSP Stream</button>
+            <button class="op-only btn-primary btn-sm" onclick="openStreamModal()">＋ Add RTSP Stream</button>
           </div>
           <div class="sites-grid" id="rs-grid"></div>
         </div>
@@ -565,6 +575,23 @@
               <pre class="log-output" id="ka-output" style="max-height:520px"></pre>
             </div>
           </div>
+        </div>
+
+        <!-- ── HEALTH TAB ── -->
+        <div class="tab-content" id="tab-health">
+          <div class="rl-setup" id="hl-setup"></div>
+          <div class="uv-tiles" id="hl-live" style="grid-template-columns:repeat(auto-fit,minmax(130px,1fr))"></div>
+          <div class="uv-card"><h4>Backends</h4>
+            <div class="sub">Probed from the nginx servers themselves (not from this manager), every <span id="hl-interval">10</span> s. Taken from the upstreams and <code>proxy_pass</code> addresses in the config.</div>
+            <div id="hl-targets" style="overflow-x:auto"></div></div>
+        </div>
+
+        <!-- ── HISTORY TAB ── -->
+        <div class="tab-content" id="tab-history">
+          <div class="uv-card"><h4>Config history</h4>
+            <div class="sub">A snapshot every time this server's files change: applied from here, or edited on the server itself. Restoring stages that version so you can review and apply it.</div>
+            <div id="hist-list" style="max-height:420px;overflow:auto"></div></div>
+          <div class="uv-card" id="hist-detail" style="display:none"></div>
         </div>
 
         <!-- ── USAGE TAB ── -->
@@ -746,6 +773,39 @@
       <div class="form-row">
         <div class="form-group"><label>Max upload size</label><input type="text" id="px-body" placeholder="nginx default (1M)" oninput="pxPreview()" /></div>
         <div class="form-group"><label>Read timeout (s)</label><input type="number" id="px-timeout" placeholder="nginx default (60)" min="1" oninput="pxPreview()" /></div>
+      </div>
+    </div>
+
+    <div style="border-top:1px solid var(--border);padding-top:12px;margin-top:4px">
+      <div style="font-size:.78rem;color:var(--text-dim);text-transform:uppercase;letter-spacing:.8px;margin-bottom:8px">Protection</div>
+      <div class="toggle-group"><label for="px-rl-on">Rate limit per client IP <span style="font-weight:400">(excess gets 429)</span></label>
+        <label class="toggle"><input type="checkbox" id="px-rl-on" onchange="pxProtUi();pxPreview()" /><span class="toggle-slider"></span></label></div>
+      <div class="form-row" id="px-rl-row" style="display:none">
+        <div class="form-group"><label>Rate</label><input type="text" id="px-rl-rate" value="10r/s" placeholder="10r/s or 300r/m" oninput="pxPreview()" /></div>
+        <div class="form-group"><label>Burst</label><input type="number" id="px-rl-burst" value="20" min="0" oninput="pxPreview()" />
+          <div class="form-hint">Extra requests allowed instantly above the rate (page loads fetch many files at once).</div></div>
+      </div>
+      <div class="toggle-group"><label for="px-cl-on">Limit concurrent connections per client IP</label>
+        <label class="toggle"><input type="checkbox" id="px-cl-on" onchange="pxProtUi();pxPreview()" /><span class="toggle-slider"></span></label></div>
+      <div class="form-group" id="px-cl-row" style="display:none;max-width:50%"><label>Max connections</label><input type="number" id="px-cl-n" value="50" min="1" oninput="pxPreview()" /></div>
+      <div class="form-hint" style="margin:-4px 0 10px">Limits are keyed by client address: clients behind one shared proxy or tunnel share them.</div>
+      <div class="toggle-group"><label for="px-sso-on">Require sign-in (SSO via <code>auth_request</code>)</label>
+        <label class="toggle"><input type="checkbox" id="px-sso-on" onchange="pxProtUi();pxPreview()" /><span class="toggle-slider"></span></label></div>
+      <div id="px-sso-row" style="display:none">
+        <div class="form-group"><label>Auth service</label>
+          <select id="px-sso-preset" onchange="pxSsoPreset()">
+            <option value="">Custom</option>
+            <option value="authelia">Authelia</option>
+            <option value="authentik">Authentik (embedded outpost)</option>
+            <option value="oauth2proxy">oauth2-proxy</option>
+          </select></div>
+        <div class="form-row">
+          <div class="form-group"><label>Check URL <span class="req">*</span></label><input type="text" id="px-sso-auth" placeholder="http://192.0.2.9:9091/api/authz/auth-request" oninput="pxPreview()" />
+            <div class="form-hint">Called for every request; 2xx = allowed, 401 = sign in.</div></div>
+          <div class="form-group"><label>Sign-in page <span class="req">*</span></label><input type="text" id="px-sso-signin" placeholder="https://auth.example.com/" oninput="pxPreview()" />
+            <div class="form-hint">Users are sent here with <code>rd=</code> set to the page they wanted.</div></div>
+        </div>
+        <div class="form-hint" style="margin-top:-6px">The backend receives Remote-User, Remote-Groups, Remote-Email and Remote-Name from the auth service.</div>
       </div>
     </div>
 
@@ -1140,6 +1200,91 @@
 
 <div id="toast-container"></div>
 
+<!-- ── GROUP SYNC MODAL ── -->
+<div class="modal-backdrop" id="sync-modal">
+  <div class="modal modal-wide" style="width:980px">
+    <h3>🔁 Compare &amp; sync — <span id="sync-group"></span></h3>
+    <div id="sync-body"></div>
+    <div class="modal-actions"><button class="btn-secondary" onclick="document.getElementById('sync-modal').classList.remove('open')">Close</button></div>
+  </div>
+</div>
+
+<!-- ── HEALTH CHECK EDIT MODAL ── -->
+<div class="modal-backdrop" id="hc-modal">
+  <div class="modal">
+    <h3>❤️ Check for <span class="mono" id="hc-key"></span></h3>
+    <div class="form-group"><label>Check</label>
+      <select id="hc-type" onchange="hcUi()"><option value="tcp">TCP connect</option><option value="http">HTTP request</option></select></div>
+    <div id="hc-http">
+      <div class="form-row">
+        <div class="form-group"><label>Path</label><input type="text" id="hc-path" value="/" /></div>
+        <div class="form-group"><label>Healthy status codes</label><input type="text" id="hc-expect" value="200-399" /></div>
+      </div>
+      <div class="form-row">
+        <div class="form-group"><label>Host header</label><input type="text" id="hc-host" placeholder="(backend address)" /></div>
+        <div class="toggle-group" style="margin-top:22px"><label for="hc-tls">HTTPS (certificate not verified)</label>
+          <label class="toggle"><input type="checkbox" id="hc-tls" /><span class="toggle-slider"></span></label></div>
+      </div>
+    </div>
+    <div class="toggle-group"><label for="hc-off">Don't check this backend</label>
+      <label class="toggle"><input type="checkbox" id="hc-off" /><span class="toggle-slider"></span></label></div>
+    <div class="form-hint">Applies to every server that probes this backend. The new check list reaches the servers with the next Apply.</div>
+    <div class="modal-actions">
+      <button class="btn-secondary" onclick="document.getElementById('hc-modal').classList.remove('open')">Cancel</button>
+      <button class="btn-primary" onclick="hcSave()">💾 Save</button>
+    </div>
+  </div>
+</div>
+
+<!-- ── HELPER INSTALL MODAL ── -->
+<div class="modal-backdrop" id="hl-modal">
+  <div class="modal modal-wide">
+    <h3>Install the nginx-manager helper</h3>
+    <p style="font-size:.84rem;color:var(--text-dim);margin-bottom:12px">
+      Run as root on <strong>each</strong> nginx server. It installs a small Python service (<code>nginx-manager-helper</code>, no extra packages)
+      that runs unprivileged, probes the backends listed in <code>helper.json</code>, reads the loopback-only <code>stub_status</code>, and reports to
+      this manager over the same UDP port as the request log. Its target list is delivered through NGINX Agent, so config changes never need a reinstall.
+    </p>
+    <div class="form-group"><textarea id="hl-script" class="code-editor" readonly style="min-height:300px;font-size:.76rem;border:1px solid var(--border);border-radius:var(--radius)"></textarea></div>
+    <div class="modal-actions">
+      <button class="btn-secondary" onclick="copyText('hl-script')">📋 Copy Script</button>
+      <button class="btn-primary" onclick="document.getElementById('hl-modal').classList.remove('open')">Done</button>
+    </div>
+  </div>
+</div>
+
+<!-- ── SETTINGS MODAL ── -->
+<div class="modal-backdrop" id="settings-modal">
+  <div class="modal modal-wide" style="width:940px">
+    <h3>⚙ Settings</h3>
+    <div class="log-subtabs" id="set-tabs">
+      <button class="log-subtab active" data-st="account">My account</button>
+      <button class="log-subtab admin-only" data-st="users">Users</button>
+      <button class="log-subtab admin-only" data-st="alerts">Alerts</button>
+      <button class="log-subtab admin-only" data-st="audit">Audit log</button>
+      <button class="log-subtab admin-only" data-st="healthdef">Health checks</button>
+    </div>
+    <div id="set-body" style="min-height:240px"></div>
+    <div class="modal-actions"><button class="btn-secondary" onclick="document.getElementById('settings-modal').classList.remove('open')">Close</button></div>
+  </div>
+</div>
+
+<!-- ── APPLY CHOICE (grouped servers) ── -->
+<div class="modal-backdrop" id="apply-modal">
+  <div class="modal">
+    <h3>📤 Apply changes</h3>
+    <p style="font-size:.86rem;color:var(--text-dim);margin-bottom:14px">
+      <strong id="apply-here-name"></strong> is in group <strong id="apply-group-name"></strong>. Apply its pending changes to the whole group
+      (<span id="apply-group-names"></span>) so the members stay identical? Servers are applied one at a time, and it stops at the first failure.
+    </p>
+    <div class="modal-actions">
+      <button class="btn-secondary" onclick="document.getElementById('apply-modal').classList.remove('open')">Cancel</button>
+      <button class="btn-secondary" onclick="applyHere(S.applyLabel)">This server only</button>
+      <button class="btn-primary" onclick="applyGroup(false)">🔁 Whole group</button>
+    </div>
+  </div>
+</div>
+
 <!-- ── KEEPALIVED LOG FORWARDER MODAL ── -->
 <div class="modal-backdrop" id="ka-modal">
   <div class="modal modal-wide">
@@ -1185,7 +1330,7 @@ const SITE_ICONS = { proxy: '🔀', static: '📁', redirect: '↩' };
 window.addEventListener('DOMContentLoaded', async () => {
   loadBranding();
   const me = await apiFetch('/api/me');
-  if (me && me.authenticated) showApp();
+  if (me && me.authenticated) showApp(me.user);
   // Tab click delegation
   document.querySelectorAll('.tab-btn').forEach(btn => {
     btn.addEventListener('click', () => switchTab(btn.dataset.tab));
@@ -1209,6 +1354,8 @@ function initSocket() {
   });
   S.socket.on('agents', debounce(loadAgents, 300));
   S.socket.on('remotelog', onRemoteLog);
+  S.socket.on('health', debounce(({ agentId } = {}) => { if (document.getElementById('tab-health').classList.contains('active')) loadHealth(); }, 1000));
+  S.socket.on('history', ({ agentId } = {}) => { if (agentId === S.currentAgentId && document.getElementById('tab-history').classList.contains('active')) loadHistory(); });
   S.socket.on('cve', debounce(() => loadCves(), 500));
   S.socket.on('branding', loadBranding);
   S.socket.on('groups', debounce(async () => { await loadGroups(); renderAgentList(); }, 300));
@@ -1298,11 +1445,12 @@ async function brandReset() {
 // ─── AUTH ─────────────────────────────────────────────
 async function doLogin() {
   const pass = document.getElementById('login-pass').value;
+  const user = document.getElementById('login-user').value.trim() || 'admin';
   const errEl = document.getElementById('login-error');
   errEl.textContent = '';
-  const r = await fetch('/api/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ password: pass }) });
-  if (r.ok) showApp();
-  else errEl.textContent = r.status === 429 ? '✗ Too many attempts — try again later' : '✗ Incorrect password';
+  const r = await fetch('/api/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ username: user, password: pass }) });
+  if (r.ok) { const d = await r.json(); showApp(d.user); }
+  else errEl.textContent = r.status === 429 ? '✗ Too many attempts — try again later' : '✗ Incorrect username or password';
 }
 
 async function doLogout() {
@@ -1310,7 +1458,11 @@ async function doLogout() {
   location.reload();
 }
 
-function showApp() {
+function showApp(user) {
+  S.me = user || S.me || { username: 'admin', role: 'admin' };
+  document.body.classList.remove('role-viewer', 'role-operator', 'role-admin');
+  document.body.classList.add(`role-${S.me.role}`);
+  document.getElementById('me-label').textContent = `${S.me.username} · ${S.me.role}`;
   document.getElementById('login-screen').style.display = 'none';
   document.getElementById('app').style.display = 'flex';
   initSocket();
@@ -1408,6 +1560,7 @@ function renderAgentList() {
           <span class="group-chevron ${isCollapsed ? 'collapsed' : ''}">▾</span>
           <span class="group-label">${esc(label)}</span>
           <span class="group-count">${agents.length}</span>
+          ${S.groups[gKey]?.drift ? `<span class="badge badge-warn" style="padding:0 6px;font-size:.66rem" title="${S.groups[gKey].drift} file(s) differ between members — open ⋯ → Compare & sync" onclick="event.stopPropagation();openSync('${esc(gKey)}')">⚠ drift</span>` : ''}
           ${gKey !== '__ungrouped__' ? `
             <button class="group-menu-btn" onclick="event.stopPropagation();showGroupMenu(event,'${esc(gKey)}')" title="Group options">⋯</button>
           ` : ''}
@@ -1609,6 +1762,7 @@ function showGroupMenu(event, gKey) {
   const menu = document.createElement('div');
   menu.className = 'ctx-menu';
   menu.innerHTML = `
+    <div class="ctx-item" onclick="closeCtxMenu();openSync('${esc(gKey)}')">🔁 Compare &amp; sync…</div>
     <div class="ctx-item" onclick="renameGroup('${esc(gKey)}')">✏️ Rename group</div>
     <div class="ctx-item" onclick="setGroupVip('${esc(gKey)}')">🛜 ${S.groups[gKey]?.vip ? 'Change' : 'Set'} VIP…</div>
     <div class="ctx-item" onclick="openAddAgent('${esc(gKey)}')">＋ Add server here</div>
@@ -1858,6 +2012,16 @@ function openProxyModal(siteId = null) {
   document.getElementById('px-body').value = s?.clientMaxBodySize || '';
   document.getElementById('px-timeout').value = s?.proxyReadTimeout ?? '';
   document.getElementById('px-port').value = s?.listenPort || 80;
+  document.getElementById('px-rl-on').checked = !!s?.rateLimit;
+  document.getElementById('px-rl-rate').value = s?.rateLimit?.rate || '10r/s';
+  document.getElementById('px-rl-burst').value = s?.rateLimit?.burst ?? 20;
+  document.getElementById('px-cl-on').checked = !!s?.connLimit;
+  document.getElementById('px-cl-n').value = s?.connLimit || 50;
+  document.getElementById('px-sso-on').checked = !!s?.sso;
+  document.getElementById('px-sso-auth').value = s?.sso?.authUrl || '';
+  document.getElementById('px-sso-signin').value = s?.sso?.signinUrl || '';
+  document.getElementById('px-sso-preset').value = '';
+  pxProtUi();
 
   // default to the cert most sites already use when creating
   const defaultCert = editing ? s.certFile : (S.certs.filter(c => c.inUse).sort((a, b) => b.usedBy.length - a.usedBy.length)[0]?.id || '');
@@ -1897,6 +2061,11 @@ function pxBody() {
     websockets: document.getElementById('px-ws').checked,
     clientMaxBodySize: document.getElementById('px-body').value.trim(),
     proxyReadTimeout: timeout === '' ? '' : parseInt(timeout, 10),
+    rateLimit: document.getElementById('px-rl-on').checked
+      ? { rate: document.getElementById('px-rl-rate').value.trim(), burst: parseInt(document.getElementById('px-rl-burst').value, 10) || 0 } : null,
+    connLimit: document.getElementById('px-cl-on').checked ? parseInt(document.getElementById('px-cl-n').value, 10) || null : null,
+    sso: document.getElementById('px-sso-on').checked
+      ? { authUrl: document.getElementById('px-sso-auth').value.trim(), signinUrl: document.getElementById('px-sso-signin').value.trim() } : null,
   };
   if (ssl) {
     body.certFile = document.getElementById('px-certfile').value.trim();
@@ -1911,6 +2080,24 @@ function pxBody() {
   return body;
 }
 
+function pxProtUi() {
+  document.getElementById('px-rl-row').style.display = document.getElementById('px-rl-on').checked ? '' : 'none';
+  document.getElementById('px-cl-row').style.display = document.getElementById('px-cl-on').checked ? '' : 'none';
+  document.getElementById('px-sso-row').style.display = document.getElementById('px-sso-on').checked ? '' : 'none';
+}
+// example endpoints for the common auth services (host/port are placeholders to edit)
+const SSO_PRESETS = {
+  authelia: { auth: 'http://authelia:9091/api/authz/auth-request', signin: 'https://auth.example.com/' },
+  authentik: { auth: 'http://authentik:9000/outpost.goauthentik.io/auth/nginx', signin: 'https://auth.example.com/outpost.goauthentik.io/start' },
+  oauth2proxy: { auth: 'http://oauth2-proxy:4180/oauth2/auth', signin: 'https://auth.example.com/oauth2/start' },
+};
+function pxSsoPreset() {
+  const p = SSO_PRESETS[document.getElementById('px-sso-preset').value];
+  if (!p) return;
+  document.getElementById('px-sso-auth').value = p.auth;
+  document.getElementById('px-sso-signin').value = p.signin;
+  pxPreview();
+}
 function pxPreview(delay = 250) {
   clearTimeout(_pxTimer);
   _pxTimer = setTimeout(async () => {
@@ -1919,11 +2106,9 @@ function pxPreview(delay = 250) {
     if (!res) { pre.textContent = '# preview unavailable'; return; }
     document.getElementById('px-target').textContent = res.path || '';
     if (res.error) { pre.innerHTML = `<span style="color:var(--warn)">⚠ ${esc(res.error)}</span>`; return; }
-    if (!res.diff) { pre.innerHTML = '<span style="color:var(--text-dim)"># no changes</span>'; return; }
-    pre.innerHTML = (res.created ? '<span style="color:var(--text-dim)"># new file</span>\n' : '') + res.diff.split('\n').map(l => {
-      const c = l.startsWith('@@') ? 'var(--accent2)' : l.startsWith('+') ? 'var(--success)' : l.startsWith('-') ? 'var(--danger)' : 'var(--text-dim)';
-      return `<span style="color:${c}">${esc(l)}</span>`;
-    }).join('\n');
+    if (!res.diff && !res.extra) { pre.innerHTML = '<span style="color:var(--text-dim)"># no changes</span>'; return; }
+    pre.innerHTML = (res.created ? '<span style="color:var(--text-dim)"># new file</span>\n' : '') + (res.diff ? colorDiff(res.diff) : '') +
+      (res.extra ? `\n\n<span style="color:var(--text-dim)"># ${esc(res.extra.path)} — limit zones (http level)</span>\n` + colorDiff(res.extra.diff) : '');
   }, delay);
 }
 
@@ -2846,12 +3031,46 @@ function enableButtons() {
   OP_BUTTONS.forEach(id => { const b = document.getElementById(id); if (b) b.disabled = false; });
 }
 
-function doApply() {
+function groupPeers(a) {
+  const g = (a?.group || '').trim();
+  return g ? S.agents.filter(x => (x.group || '').trim() === g && x.id !== a.id) : [];
+}
+function doApply(label) {
   if (!S.currentAgentId) return;
   const a = currentAgent();
+  const peers = groupPeers(a);
+  if (a?.pendingChanges && peers.length) { openApplyChoice(a, peers, label); return; }
   if (!a?.pendingChanges && !confirm('No pending changes. Re-apply the current config anyway?')) return;
+  applyHere(label);
+}
+function applyHere(label) {
+  document.getElementById('apply-modal').classList.remove('open');
   switchLogPane('ops'); switchTab('terminal'); clearLog(); disableButtons();
-  S.socket.emit('apply', { agentId: S.currentAgentId });
+  S.socket.emit('apply', { agentId: S.currentAgentId, label: typeof label === 'string' ? label : undefined });
+}
+function openApplyChoice(a, peers, label) {
+  S.applyLabel = typeof label === 'string' ? label : undefined;
+  document.getElementById('apply-here-name').textContent = a.name;
+  document.getElementById('apply-group-names').textContent = [a, ...peers].map(x => x.name).join(', ');
+  document.getElementById('apply-group-name').textContent = a.group;
+  document.getElementById('apply-modal').classList.add('open');
+}
+async function applyGroup(force) {
+  document.getElementById('apply-modal').classList.remove('open');
+  const id = S.currentAgentId;
+  switchLogPane('ops'); switchTab('terminal'); clearLog(); disableButtons();
+  const r = await apiFetch(`/api/agents/${id}/apply-group`, { method: 'POST', body: { force: !!force, label: S.applyLabel } });
+  enableButtons();
+  if (r?._status === 409 && r.conflicts) {
+    const list = r.conflicts.map(c => `• ${c.server}: ${c.name}`).join('\n');
+    if (confirm(`These files were changed separately on other servers — copying this server's edit would overwrite those changes:\n\n${list}\n\nOverwrite them anyway?`)) return applyGroup(true);
+    return;
+  }
+  if (!r || r.error) { toast(`❌ ${r?.error || 'Group apply failed'}`, 'error'); return; }
+  const bad = r.results.filter(x => !x.success);
+  if (bad.length) toast(`❌ ${bad.map(x => `${x.name}: ${x.output}`).join('; ')} — later servers were not changed`, 'error');
+  else toast(`✅ Applied to ${r.results.map(x => x.name).join(', ')}`, 'success');
+  loadAgents();
 }
 async function doDiscard() {
   if (!S.currentAgentId) return;
@@ -2895,6 +3114,8 @@ function switchTab(name) {
   document.querySelectorAll('.tab-content').forEach(t => t.classList.toggle('active', t.id === 'tab-' + name));
   if (name === 'terminal' && S.logPane !== 'ops') loadRemoteLogs();
   if (name === 'usage') loadUsage();
+  if (name === 'health') loadHealth();
+  if (name === 'history') loadHistory();
   if (name === 'cve') loadCves();
 }
 
@@ -3070,6 +3291,403 @@ function renderKeepalived() {
 }
 
 
+
+// ─── HEALTH (backend checks from the data plane) ──────
+S.hl = null;
+async function loadHealth() {
+  const id = S.currentAgentId; if (!id) return;
+  const d = await apiFetch(`/api/agents/${id}/health`);
+  if (!d || d.error || id !== S.currentAgentId) return;
+  S.hl = d;
+  renderHealth();
+}
+
+function renderHealth() {
+  const d = S.hl, a = currentAgent();
+  document.getElementById('hl-interval').textContent = d.defaults.interval;
+  const rep = d.report;
+  const fresh = rep && Date.now() - Date.parse(rep.at) < d.defaults.interval * 3000;
+  let state, btns = '';
+  if (d.enabled && d.pending) {
+    state = '🟡 Health checks are staged but not applied yet.';
+    btns = `<button class="btn-primary btn-sm op-only" onclick="doApply()">🚀 Apply</button>`;
+  } else if (d.enabled) {
+    state = fresh ? `🟢 Helper reporting (v${esc(rep.helper || '?')}, last report ${esc(rlAgo(rep.at))}).`
+      : rep ? `🔴 No report from the helper since ${esc(rlAgo(rep.at))} — is <code>nginx-manager-helper</code> running on ${esc(a.name)}?`
+      : `⚪ Enabled — waiting for the helper on ${esc(a.name)}. Install it with the script below if you haven't.`;
+    if (!d.upToDate) state += ' <strong style="color:var(--warn)">The check list changed — apply to update it.</strong>';
+    btns = `${d.upToDate ? '' : '<button class="btn-primary btn-sm op-only" onclick="hlEnable(true)">Update</button>'}<button class="btn-secondary btn-sm op-only" onclick="hlEnable(false)">Disable</button>`;
+  } else if (d.pending) {
+    state = '🟡 Disabling health checks is staged — apply to finish.';
+    btns = `<button class="btn-primary btn-sm op-only" onclick="doApply()">🚀 Apply</button>`;
+  } else {
+    state = `⚪ Off. Enabling deploys the check list (<span class="mono">${esc(d.files.config)}</span>) and a loopback-only status page
+      (<span class="mono">${esc(d.files.status.split('/').pop())}</span>) through the agent. The probes then run from ${esc(a.name)} itself — the manager never needs to reach your backends.`;
+    btns = `<button class="btn-primary btn-sm op-only" onclick="hlEnable(true)">Enable &amp; apply</button>`;
+  }
+  document.getElementById('hl-setup').innerHTML = `<span class="grow">${state}</span>${btns}${d.installScript ? '<button class="btn-secondary btn-sm" onclick="hlInstall()">Helper install script</button>' : ''}`;
+
+  const st = d.status;
+  const tile = (l, v, sub) => `<div class="uv-tile"><div class="l">${l}</div><div class="v">${v}</div>${sub ? `<div class="s">${sub}</div>` : ''}</div>`;
+  const up = d.targets.filter(t => t.state?.status === 'up').length, down = d.targets.filter(t => t.state?.status === 'down').length;
+  document.getElementById('hl-live').innerHTML = !d.enabled ? '' :
+    tile('Active connections', st && fresh ? fmtN(st.active) : '—', st && fresh ? `${st.reading} reading · ${st.writing} writing · ${st.waiting} idle` : 'live, from stub_status') +
+    tile('Backends up', `${up} / ${d.targets.length}`, down ? `<span style="color:#d03b3b">⛔ ${down} down</span>` : '') +
+    tile('Requests served', st && fresh ? fmtN(st.requests) : '—', 'since nginx started');
+
+  const peers = d.targets[0]?.peers || [];
+  const dot = s => !s ? '<span style="color:var(--text-dim)">— no data</span>'
+    : s.status === 'up' ? `<span style="color:#0ca30c">● up</span>` : s.status === 'down' ? `<span style="color:#d03b3b">● down</span>` : '<span style="color:var(--text-dim)">○ checking</span>';
+  const strip = s => s?.recent?.length ? `<span style="display:inline-flex;gap:1px;vertical-align:middle" title="last ${s.recent.length} minutes">${s.recent.map(r =>
+    `<i style="display:inline-block;width:3px;height:12px;border-radius:1px;background:${r === 'up' ? '#0ca30c' : r === 'down' ? '#d03b3b' : '#fab219'}"></i>`).join('')}</span>` : '';
+  document.getElementById('hl-targets').innerHTML = !d.targets.length ? '<div style="font-size:.82rem;color:var(--text-dim)">No backends found in the config.</div>' :
+    `<table class="cve-table"><thead><tr><th>Backend</th><th>Used by</th><th>Check</th><th>${esc(a.name)}</th>${peers.map(p => `<th>${esc(p.name)}</th>`).join('')}<th>Latency</th><th>24 h</th><th>Last hour</th><th></th></tr></thead><tbody>${
+      d.targets.map(t => {
+        const s = t.state, cfg = t.settings;
+        const check = cfg.disabled ? '<span style="color:var(--text-dim)">off</span>' : cfg.type === 'http' ? `HTTP${cfg.tls ?? t.tls ? 'S' : ''} ${esc(cfg.path || '/')} → ${esc(cfg.expect || '200-399')}` : 'TCP';
+        return `<tr><td class="mono">${esc(t.key)}${s?.error && s.status !== 'up' ? `<div style="font-size:.72rem;color:#d03b3b">${esc(s.error)}</div>` : ''}</td>
+          <td style="font-size:.76rem;color:var(--text-dim)">${esc(t.usedBy.join(', '))}</td><td style="font-size:.78rem">${check}</td>
+          <td>${dot(s)}${s?.since ? `<div style="font-size:.7rem;color:var(--text-dim)">since ${esc(rlAgo(s.since))}</div>` : ''}</td>
+          ${t.peers.map(p => `<td>${dot(p.state)}</td>`).join('')}
+          <td class="mono">${s?.ms != null ? `${s.ms} ms` : '—'}</td>
+          <td class="mono">${s?.uptime24h != null ? `${(s.uptime24h * 100).toFixed(s.uptime24h < 1 ? 2 : 0)}%` : '—'}</td>
+          <td>${strip(s)}</td>
+          <td><button class="btn-secondary btn-xs op-only" onclick="hcOpen('${esc(t.key)}')">Edit check</button></td></tr>`;
+      }).join('')}</tbody></table>`;
+}
+
+async function hlEnable(on) {
+  const r = await apiFetch(`/api/agents/${S.currentAgentId}/health`, { method: 'POST', body: { enabled: on } });
+  if (!r?.ok) { toast(`❌ ${r?.error || 'failed'}`, 'error'); return; }
+  await loadAgents(); await loadHealth();
+  doApply(on ? 'Enable health checks' : 'Disable health checks');
+}
+function hlInstall() {
+  document.getElementById('hl-script').value = S.hl.installScript;
+  document.getElementById('hl-modal').classList.add('open');
+}
+let _hcKey = null;
+function hcOpen(key) {
+  const t = S.hl.targets.find(x => x.key === key); const c = t.settings || {};
+  _hcKey = key;
+  document.getElementById('hc-key').textContent = key;
+  document.getElementById('hc-type').value = c.type || 'tcp';
+  document.getElementById('hc-path').value = c.path || '/';
+  document.getElementById('hc-expect').value = c.expect || '200-399';
+  document.getElementById('hc-host').value = c.hostHeader || '';
+  document.getElementById('hc-tls').checked = c.tls ?? t.tls;
+  document.getElementById('hc-off').checked = !!c.disabled;
+  hcUi();
+  document.getElementById('hc-modal').classList.add('open');
+}
+function hcUi() { document.getElementById('hc-http').style.display = document.getElementById('hc-type').value === 'http' ? '' : 'none'; }
+async function hcSave() {
+  const type = document.getElementById('hc-type').value;
+  const settings = { type, disabled: document.getElementById('hc-off').checked };
+  if (type === 'http') Object.assign(settings, { path: document.getElementById('hc-path').value.trim() || '/', expect: document.getElementById('hc-expect').value.trim() || '200-399',
+    hostHeader: document.getElementById('hc-host').value.trim(), tls: document.getElementById('hc-tls').checked });
+  const r = await apiFetch('/api/health/targets', { method: 'PUT', body: { key: _hcKey, settings } });
+  if (!r?.ok) { toast(`❌ ${r?.error || 'failed'}`, 'error'); return; }
+  document.getElementById('hc-modal').classList.remove('open');
+  toast(r.staged.length ? `Saved — staged on ${r.staged.join(', ')}; apply to send it to the servers` : 'Saved', 'success');
+  await loadAgents(); loadHealth();
+}
+
+// ─── HISTORY & ROLLBACK ───────────────────────────────
+S.hist = [];
+async function loadHistory() {
+  const id = S.currentAgentId; if (!id) return;
+  const d = await apiFetch(`/api/agents/${id}/history`);
+  if (!Array.isArray(d) || id !== S.currentAgentId) return;
+  S.hist = d;
+  const cause = h => h.cause === 'apply' ? `📤 ${esc(h.label || 'Apply')}` : h.cause === 'baseline' ? '📸 First snapshot' : '✋ Changed on the server';
+  document.getElementById('hist-list').innerHTML = !d.length ? '<div style="font-size:.82rem;color:var(--text-dim)">No history yet — the first snapshot is taken once the agent has reported its files.</div>' :
+    `<table class="cve-table"><thead><tr><th>When</th><th>What</th><th>By</th><th>Changes</th><th></th></tr></thead><tbody>${d.map((h, i) => `
+      <tr><td style="white-space:nowrap">${esc(formatDate(h.at))}${i === 0 ? ' <span class="badge badge-accent">current</span>' : ''}</td>
+        <td>${cause(h)}</td><td>${esc(h.user || (h.cause === 'apply' ? 'system' : '—'))}</td>
+        <td style="font-size:.76rem;color:var(--text-dim)">${h.changes.length ? h.changes.slice(0, 4).map(c => `${c.change === 'added' ? '+' : c.change === 'deleted' ? '−' : '~'} ${esc(c.name.split('/').pop())}`).join(', ') + (h.changes.length > 4 ? ` +${h.changes.length - 4} more` : '') : `${h.fileCount} files`}</td>
+        <td style="white-space:nowrap"><button class="btn-secondary btn-xs" onclick="histShow('${h.id}','previous')">Changes</button>
+          ${i ? `<button class="btn-secondary btn-xs" onclick="histShow('${h.id}','current')">vs now</button>
+          <button class="btn-warn btn-xs op-only" onclick="histRestore('${h.id}')">↶ Restore</button>` : ''}</td></tr>`).join('')}</tbody></table>`;
+}
+
+async function histShow(snap, against) {
+  const d = await apiFetch(`/api/agents/${S.currentAgentId}/history/${snap}?against=${against}`);
+  if (!d || d.error) { toast(d?.error || 'failed', 'error'); return; }
+  const el = document.getElementById('hist-detail');
+  el.style.display = '';
+  const title = against === 'current' ? `Restoring ${formatDate(d.at)} would change` : `${formatDate(d.at)} — changes from the version before`;
+  el.innerHTML = `<h4>${esc(title)}</h4><div class="sub">${d.changes.length} file(s)${d.user ? ` · by ${esc(d.user)}` : ''}${against === 'current' ? ' · "−" lines are what is on the server now' : ''}</div>` +
+    (!d.diffs.length ? '<div style="font-size:.82rem;color:var(--text-dim)">Identical.</div>' : d.diffs.map(f => `
+      <div style="margin-top:10px"><div class="mono" style="font-size:.8rem;color:var(--accent)">${esc(f.name)}</div>
+      ${f.secret ? '<div style="font-size:.78rem;color:var(--text-dim)">🔒 private key / password file — content not shown</div>'
+        : f.missing ? '<div style="font-size:.78rem;color:var(--warn)">contents not available</div>'
+        : `<pre class="preview-pane" style="white-space:pre;overflow:auto;max-height:320px;margin-top:4px">${colorDiff(f.diff)}</pre>`}</div>`).join(''));
+  el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+}
+
+async function histRestore(snap) {
+  const h = S.hist.find(x => x.id === snap);
+  if (!confirm(`Stage the config from ${formatDate(h.at)}?\n\nAny unapplied changes on this server are discarded. Nothing is pushed until you click Apply.`)) return;
+  const r = await apiFetch(`/api/agents/${S.currentAgentId}/history/${snap}/restore`, { method: 'POST' });
+  if (!r?.ok) { toast(`❌ ${r?.error || 'failed'}`, 'error'); return; }
+  await loadAgents();
+  await Promise.all([loadConfigs(), loadSites(), loadCerts(), loadForwardProxies(), loadStreams()]);
+  toast(`Staged: ${r.staged} file(s) restored, ${r.removed} removed — review, then Apply`, 'success');
+  if (confirm(`Rollback staged (${r.staged} restored, ${r.removed} removed). Apply it now?`)) doApply(r.label);
+}
+
+// ─── GROUP SYNC & DRIFT ───────────────────────────────
+S.sync = { group: null, data: null, source: null };
+async function openSync(group) {
+  S.sync = { group, data: null, source: S.agents.find(a => a.id === S.currentAgentId && (a.group || '').trim() === group)?.id || null };
+  document.getElementById('sync-group').textContent = group;
+  document.getElementById('sync-modal').classList.add('open');
+  await loadSync();
+}
+async function loadSync() {
+  const d = await apiFetch(`/api/groups/${encodeURIComponent(S.sync.group)}/drift`);
+  if (!d || d.error) { document.getElementById('sync-body').textContent = d?.error || 'failed'; return; }
+  S.sync.data = d;
+  if (!S.sync.source || !d.members.some(m => m.id === S.sync.source)) S.sync.source = d.members[0]?.id;
+  renderSync();
+}
+function renderSync() {
+  const d = S.sync.data, src = S.sync.source;
+  const pend = d.members.filter(m => d.pending[m.id]).map(m => `${m.name} (${d.pending[m.id]})`);
+  const letters = {};
+  const cell = (f, m) => {
+    const h = f.states[m.id];
+    if (!h) return '<span style="color:#d03b3b">missing</span>';
+    const key = `${f.name}:${h}`;
+    if (!letters[f.name]) letters[f.name] = new Map();
+    if (!letters[f.name].has(h)) letters[f.name].set(h, String.fromCharCode(65 + letters[f.name].size));
+    const same = h === f.states[src];
+    return `<span style="color:${same ? '#0ca30c' : '#fab219'}" title="${esc(h.slice(0, 12))}">version ${letters[f.name].get(h)}${same && m.id !== src ? ' ✓' : ''}</span>`;
+  };
+  document.getElementById('sync-body').innerHTML = `
+    <p style="font-size:.84rem;color:var(--text-dim);margin-bottom:10px">${d.members.length < 2 ? 'This group has only one server.'
+      : d.inSync ? `✅ <strong style="color:var(--text)">In sync</strong> — every file is identical on ${d.members.map(m => esc(m.name)).join(' and ')}.`
+      : `⚠ <strong style="color:var(--text)">${d.drift.length} file(s) differ.</strong> Pick the server whose version is right, tick the files, and copy them to the others.`}
+      Compares what is on the servers (including deployed keys); pending edits aren't counted.${pend.length ? ` <strong style="color:var(--warn)">Unapplied changes on ${esc(pend.join(', '))}.</strong>` : ''}</p>
+    ${d.drift.length ? `<table class="cve-table"><thead><tr><th><input type="checkbox" id="sync-all" checked onchange="document.querySelectorAll('.sync-f').forEach(c=>c.checked=this.checked)"></th><th>File</th>${
+      d.members.map(m => `<th><label style="display:flex;gap:5px;align-items:center;cursor:pointer"><input type="radio" name="sync-src" value="${m.id}" ${m.id === src ? 'checked' : ''} onchange="S.sync.source=this.value;renderSync()"> ${esc(m.name)}${m.id === src ? ' (source)' : ''}</label></th>`).join('')}<th></th></tr></thead><tbody>${
+      d.drift.map(f => `<tr><td><input type="checkbox" class="sync-f" value="${esc(f.name)}" checked></td><td class="mono" style="font-size:.78rem">${esc(f.name)}</td>
+        ${d.members.map(m => `<td>${cell(f, m)}</td>`).join('')}
+        <td><button class="btn-secondary btn-xs" onclick="syncDiff('${esc(f.name)}')">Diff</button></td></tr>`).join('')}</tbody></table>
+      <pre class="preview-pane" id="sync-diff" style="display:none;white-space:pre;overflow:auto;max-height:260px"></pre>
+      <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:12px" class="op-only">
+        <button class="btn-secondary btn-sm" onclick="syncRun(false)">Stage on the other servers</button>
+        <button class="btn-primary btn-sm" onclick="syncRun(true)">🔁 Copy &amp; apply</button>
+      </div>` : ''}
+    <details style="margin-top:14px"><summary style="cursor:pointer;font-size:.8rem;color:var(--text-dim)">Ignore files that are meant to differ (${d.ignore.length})</summary>
+      <div class="form-group" style="margin-top:8px"><textarea id="sync-ignore" rows="3" style="font-family:var(--mono);font-size:.8rem" placeholder="/etc/nginx/conf.d/local-*.conf">${esc(d.ignore.join('\n'))}</textarea>
+        <div class="form-hint">One absolute path per line; <code>*</code> matches within a directory, <code>**</code> across directories.</div></div>
+      <button class="btn-secondary btn-sm op-only" onclick="syncSaveIgnore()">Save</button></details>`;
+}
+async function syncDiff(file) {
+  const d = S.sync.data, src = S.sync.source;
+  const other = d.members.find(m => m.id !== src && d.drift.find(f => f.name === file).states[m.id] !== d.drift.find(f => f.name === file).states[src]);
+  const r = await apiFetch(`/api/groups/${encodeURIComponent(S.sync.group)}/diff?file=${encodeURIComponent(file)}&a=${other.id}&b=${src}`);
+  const pre = document.getElementById('sync-diff');
+  pre.style.display = '';
+  const srcName = d.members.find(m => m.id === src).name;
+  pre.innerHTML = `<span style="color:var(--text-dim)"># ${esc(file)}: ${esc(other.name)} (−) → ${esc(srcName)} (+)</span>\n` +
+    (r?.secret ? '🔒 private key / password file — content not shown' : r?.missing ? 'contents not available' : colorDiff(r?.diff || ''));
+}
+async function syncRun(apply) {
+  const files = [...document.querySelectorAll('.sync-f:checked')].map(c => c.value);
+  if (!files.length) { toast('Tick at least one file', 'info'); return; }
+  const d = S.sync.data, srcName = d.members.find(m => m.id === S.sync.source).name;
+  const others = d.members.filter(m => m.id !== S.sync.source).map(m => m.name).join(', ');
+  if (!confirm(`Copy ${files.length} file(s) from ${srcName} to ${others}${apply ? ' and apply' : ' (staged, not applied)'}?`)) return;
+  const r = await apiFetch(`/api/groups/${encodeURIComponent(S.sync.group)}/sync`, { method: 'POST', body: { source: S.sync.source, files, apply } });
+  if (!r?.ok) { toast(`❌ ${r?.error || 'failed'}`, 'error'); return; }
+  const bad = (r.results || []).filter(x => !x.success);
+  toast(bad.length ? `❌ ${bad.map(x => `${x.name}: ${x.output}`).join('; ')}` : apply ? `✅ Synced and applied` : 'Staged — apply each server (or use Apply → Whole group)', bad.length ? 'error' : 'success');
+  await loadAgents(); await loadGroups(); renderAgentList(); loadSync();
+}
+async function syncSaveIgnore() {
+  const r = await apiFetch(`/api/groups/${encodeURIComponent(S.sync.group)}/sync-settings`, { method: 'PUT', body: { ignore: document.getElementById('sync-ignore').value } });
+  if (!r?.ok) { toast(`❌ ${r?.error || 'failed'}`, 'error'); return; }
+  toast('Saved', 'success'); loadSync();
+}
+
+// ─── SETTINGS: account, users, alerts, audit, health defaults ─
+S.set = { tab: 'account' };
+document.addEventListener('click', e => { const b = e.target.closest('#set-tabs .log-subtab'); if (b) { S.set.tab = b.dataset.st; renderSettings(); } });
+function openSettings() { S.set.tab = 'account'; document.getElementById('settings-modal').classList.add('open'); renderSettings(); }
+async function renderSettings() {
+  document.querySelectorAll('#set-tabs .log-subtab').forEach(b => b.classList.toggle('active', b.dataset.st === S.set.tab));
+  const el = document.getElementById('set-body');
+  const t = S.set.tab;
+  if (t === 'account') {
+    el.innerHTML = `<p style="font-size:.86rem;margin-bottom:12px">Signed in as <strong>${esc(S.me.username)}</strong> (${esc(S.me.role)}).</p>` + (S.me.builtin
+      ? '<p style="font-size:.82rem;color:var(--text-dim)">The built-in <code>admin</code> password is set with <code>ADMIN_PASSWORD</code> in the manager\'s .env. Create named accounts under Users for day-to-day use.</p>'
+      : `<div class="form-row"><div class="form-group"><label>Current password</label><input type="password" id="me-cur" autocomplete="current-password"></div>
+         <div class="form-group"><label>New password (10+ characters)</label><input type="password" id="me-new" autocomplete="new-password"></div></div>
+         <button class="btn-primary btn-sm" onclick="changeMyPassword()">Change password</button>`);
+  } else if (t === 'users') {
+    const list = await apiFetch('/api/users') || [];
+    el.innerHTML = `<table class="cve-table"><thead><tr><th>User</th><th>Role</th><th>Last sign-in</th><th></th></tr></thead><tbody>${list.map(u => `
+      <tr><td><strong>${esc(u.username)}</strong>${u.builtin ? ' <span class="badge badge-info">built-in</span>' : ''}</td>
+        <td>${u.builtin ? 'admin' : `<select onchange="userRole('${esc(u.username)}',this.value)" ${u.username === S.me.username ? 'disabled' : ''}>${['viewer', 'operator', 'admin'].map(r => `<option ${r === u.role ? 'selected' : ''}>${r}</option>`).join('')}</select>`}</td>
+        <td style="font-size:.78rem;color:var(--text-dim)">${u.lastLogin ? esc(formatDate(u.lastLogin)) : u.builtin ? '—' : 'never'}</td>
+        <td style="white-space:nowrap">${u.builtin ? '' : `<button class="btn-secondary btn-xs" onclick="userReset('${esc(u.username)}')">Reset password</button>
+          ${u.username === S.me.username ? '' : `<button class="btn-danger btn-xs" onclick="userRemove('${esc(u.username)}')">Remove</button>`}`}</td></tr>`).join('')}</tbody></table>
+      <div style="border-top:1px solid var(--border);margin-top:14px;padding-top:12px">
+        <div class="form-row-3"><div class="form-group"><label>Username</label><input type="text" id="nu-name" autocomplete="off" autocapitalize="none"></div>
+          <div class="form-group"><label>Role</label><select id="nu-role"><option value="viewer">viewer — read-only</option><option value="operator" selected>operator — edit &amp; apply</option><option value="admin">admin — everything</option></select></div>
+          <div class="form-group"><label>Password (10+)</label><input type="password" id="nu-pass" autocomplete="new-password"></div></div>
+        <button class="btn-primary btn-sm" onclick="userAdd()">＋ Add user</button>
+        <div class="form-hint" style="margin-top:8px">Viewers can see everything except private keys and password files. Operators can edit, apply, roll back and sync. Admins also manage users, alerts, branding and server enrolment.</div></div>`;
+  } else if (t === 'audit') {
+    el.innerHTML = `<div class="rl-toolbar"><input id="au-q" placeholder="Search user, action, server…" oninput="auditLoadDebounced()" /></div><div id="au-list" style="max-height:440px;overflow:auto"></div>`;
+    auditLoad();
+  } else if (t === 'alerts') {
+    renderAlertSettings(await apiFetch('/api/alerts'));
+  } else if (t === 'healthdef') {
+    const h = S.hl?.defaults || (await apiFetch(`/api/agents/${S.currentAgentId || (S.agents[0] || {}).id}/health`))?.defaults || { interval: 10, timeout: 3, fall: 3, rise: 2 };
+    el.innerHTML = `<p style="font-size:.84rem;color:var(--text-dim);margin-bottom:12px">How the helper on each server checks backends. A backend is marked down after <em>fall</em> consecutive failures and up again after <em>rise</em> successes.</p>
+      <div class="form-row" style="grid-template-columns:repeat(4,1fr)">
+        ${[['interval', 'Interval (s)'], ['timeout', 'Timeout (s)'], ['fall', 'Fall'], ['rise', 'Rise']].map(([k, l]) => `<div class="form-group"><label>${l}</label><input type="number" id="hd-${k}" value="${h[k]}" min="1"></div>`).join('')}</div>
+      <button class="btn-primary btn-sm" onclick="saveHealthDefaults()">💾 Save</button>
+      <div class="form-hint" style="margin-top:8px">Saving stages the new check list on every server with health checks on; it reaches them on the next Apply.</div>`;
+  }
+}
+async function changeMyPassword() {
+  const r = await apiFetch('/api/me/password', { method: 'POST', body: { current: document.getElementById('me-cur').value, password: document.getElementById('me-new').value } });
+  toast(r?.ok ? 'Password changed' : `❌ ${r?.error || 'failed'}`, r?.ok ? 'success' : 'error');
+}
+async function userAdd() {
+  const r = await apiFetch('/api/users', { method: 'POST', body: { username: document.getElementById('nu-name').value, role: document.getElementById('nu-role').value, password: document.getElementById('nu-pass').value } });
+  if (r?.username) { toast(`Added ${r.username}`, 'success'); renderSettings(); } else toast(`❌ ${r?.error || 'failed'}`, 'error');
+}
+async function userRole(name, role) {
+  const r = await apiFetch(`/api/users/${encodeURIComponent(name)}`, { method: 'PUT', body: { role } });
+  toast(r?.username ? `${name} is now ${role}` : `❌ ${r?.error || 'failed'}`, r?.username ? 'success' : 'error'); renderSettings();
+}
+async function userReset(name) {
+  const pw = prompt(`New password for ${name} (10+ characters):`);
+  if (!pw) return;
+  const r = await apiFetch(`/api/users/${encodeURIComponent(name)}`, { method: 'PUT', body: { password: pw } });
+  toast(r?.username ? 'Password reset' : `❌ ${r?.error || 'failed'}`, r?.username ? 'success' : 'error');
+}
+async function userRemove(name) {
+  if (!confirm(`Remove user ${name}? They are signed out immediately.`)) return;
+  const r = await apiFetch(`/api/users/${encodeURIComponent(name)}`, { method: 'DELETE' });
+  toast(r?.ok ? `Removed ${name}` : `❌ ${r?.error || 'failed'}`, r?.ok ? 'success' : 'error'); renderSettings();
+}
+async function auditLoad() {
+  const q = document.getElementById('au-q')?.value || '';
+  const list = await apiFetch(`/api/audit?limit=300${q ? `&q=${encodeURIComponent(q)}` : ''}`) || [];
+  const el = document.getElementById('au-list'); if (!el) return;
+  el.innerHTML = !list.length ? '<div style="font-size:.82rem;color:var(--text-dim)">Nothing recorded yet.</div>' :
+    `<table class="cve-table"><thead><tr><th>When</th><th>User</th><th>Action</th><th>Server / target</th><th>Result</th></tr></thead><tbody>${list.map(e => `
+      <tr><td style="white-space:nowrap;font-size:.76rem">${esc(formatDate(e.at))}</td><td>${esc(e.user || '')}</td>
+        <td class="mono" style="font-size:.76rem">${esc(e.action)}${e.detail ? `<div style="font-family:var(--font);color:var(--text-dim)">${esc(String(e.detail).slice(0, 200))}</div>` : ''}</td>
+        <td style="font-size:.78rem">${esc([e.agent, e.target].filter(Boolean).join(' · '))}</td>
+        <td style="font-size:.78rem;color:${e.result === 'ok' ? '#0ca30c' : e.result ? '#d03b3b' : 'var(--text-dim)'}">${esc(e.result || '')}</td></tr>`).join('')}</tbody></table>`;
+}
+const auditLoadDebounced = debounce(auditLoad, 300);
+
+function renderAlertSettings(a) {
+  const el = document.getElementById('set-body');
+  if (!a || a.error) { el.textContent = a?.error || 'failed'; return; }
+  S.set.alerts = a;
+  const e = a.email, th = a.thresholds;
+  el.innerHTML = `
+    <div class="uv-card"><h4>Email (SMTP)</h4>
+      <div class="toggle-group"><label for="al-em-on">Send alerts by email</label><label class="toggle"><input type="checkbox" id="al-em-on" ${e.enabled ? 'checked' : ''}><span class="toggle-slider"></span></label></div>
+      <div class="form-row-3"><div class="form-group"><label>SMTP server</label><input type="text" id="al-em-host" value="${esc(e.host)}" placeholder="smtp.example.com"></div>
+        <div class="form-group"><label>Port</label><input type="number" id="al-em-port" value="${e.port}"></div>
+        <div class="form-group"><label>Security</label><select id="al-em-sec">${[['starttls', 'STARTTLS (587)'], ['tls', 'TLS (465)'], ['none', 'None (25, LAN relay)']].map(([v, l]) => `<option value="${v}" ${e.security === v ? 'selected' : ''}>${l}</option>`).join('')}</select></div></div>
+      <div class="form-row"><div class="form-group"><label>Username</label><input type="text" id="al-em-user" value="${esc(e.user)}" autocomplete="off"></div>
+        <div class="form-group"><label>Password</label><input type="password" id="al-em-pass" placeholder="${e.passSet ? '(unchanged — stored)' : ''}" autocomplete="new-password"></div></div>
+      <div class="form-row"><div class="form-group"><label>From</label><input type="text" id="al-em-from" value="${esc(e.from)}" placeholder="nginx-manager &lt;alerts@example.com&gt;"></div>
+        <div class="form-group"><label>To (comma-separated)</label><input type="text" id="al-em-to" value="${esc(e.to.join(', '))}"></div></div></div>
+    <div class="uv-card"><h4>Webhooks</h4><div class="sub">POSTed for every alert. Formats: JSON (Home Assistant, n8n, anything), Slack/Mattermost, Discord, ntfy, Teams.</div>
+      <div id="al-whs"></div><button class="btn-secondary btn-sm" onclick="alAddWebhook()">＋ Add webhook</button></div>
+    <div class="uv-card"><h4>When to alert</h4>
+      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:2px 16px">${Object.entries(a.catalog).map(([k, l]) => `
+        <label style="display:flex;gap:8px;align-items:center;font-size:.84rem;padding:4px 0"><input type="checkbox" class="al-ev" value="${k}" ${a.events[k] ? 'checked' : ''}> ${esc(l)}</label>`).join('')}</div>
+      <div class="form-row-3" style="margin-top:10px">
+        <div class="form-group"><label>Cert expiry warning (days)</label><input type="number" id="al-t-certDays" value="${th.certDays}"></div>
+        <div class="form-group"><label>5xx spike (% of requests)</label><input type="number" id="al-t-errorPct" value="${th.errorPct}"></div>
+        <div class="form-group"><label>Denied spike (%)</label><input type="number" id="al-t-deniedPct" value="${th.deniedPct}"></div>
+        <div class="form-group"><label>Spike window (minutes)</label><input type="number" id="al-t-windowMin" value="${th.windowMin}"></div>
+        <div class="form-group"><label>…and at least N requests</label><input type="number" id="al-t-minRequests" value="${th.minRequests}"></div>
+        <div class="form-group"><label>Offline after (minutes)</label><input type="number" id="al-t-offlineMin" value="${th.offlineMin}"></div>
+        <div class="form-group"><label>Drift lasting (minutes)</label><input type="number" id="al-t-driftMin" value="${th.driftMin}"></div>
+        <div class="form-group"><label>Repeat the same alert after (minutes)</label><input type="number" id="al-cool" value="${a.cooldownMin}"></div></div></div>
+    <div style="display:flex;gap:8px;justify-content:flex-end"><button class="btn-secondary btn-sm" onclick="alTest()">📨 Send test</button><button class="btn-primary btn-sm" onclick="alSave()">💾 Save</button></div>
+    <details style="margin-top:12px"><summary style="cursor:pointer;font-size:.8rem;color:var(--text-dim)">Recently sent</summary><div id="al-hist" style="max-height:260px;overflow:auto;margin-top:8px"></div></details>`;
+  S.set.whs = a.webhooks.map(w => ({ ...w }));
+  alRenderWebhooks();
+  apiFetch('/api/alerts/history').then(list => {
+    const h = document.getElementById('al-hist'); if (!h || !Array.isArray(list)) return;
+    h.innerHTML = !list.length ? '<div style="font-size:.8rem;color:var(--text-dim)">None yet.</div>' : `<table class="cve-table"><tbody>${list.map(x => `
+      <tr><td style="white-space:nowrap;font-size:.76rem">${esc(formatDate(x.at))}</td><td>${x.severity === 'ok' ? '🟢' : x.severity === 'critical' ? '🔴' : x.severity === 'warning' ? '🟠' : '🔵'} ${esc(x.title)}</td>
+        <td style="font-size:.76rem">${x.results.map(r => `<span style="color:${r.ok ? '#0ca30c' : '#d03b3b'}">${esc(r.channel)}${r.ok ? ' ✓' : ` ✗ ${esc(r.error || '')}`}</span>`).join(' · ') || '<span style="color:var(--text-dim)">no channel configured</span>'}</td></tr>`).join('')}</tbody></table>`;
+  });
+}
+function alRenderWebhooks() {
+  document.getElementById('al-whs').innerHTML = S.set.whs.map((w, i) => `
+    <div class="form-row" style="grid-template-columns:1fr 2fr 1fr auto auto;align-items:end;gap:8px">
+      <div class="form-group"><label>Name</label><input type="text" value="${esc(w.name || '')}" oninput="S.set.whs[${i}].name=this.value"></div>
+      <div class="form-group"><label>URL</label><input type="text" value="${esc(w.url || '')}" placeholder="https://ntfy.sh/my-topic" oninput="S.set.whs[${i}].url=this.value"></div>
+      <div class="form-group"><label>Format</label><select onchange="S.set.whs[${i}].format=this.value">${S.set.alerts.formats.map(f => `<option ${w.format === f ? 'selected' : ''}>${f}</option>`).join('')}</select></div>
+      <div class="form-group"><label>On</label><input type="checkbox" ${w.enabled !== false ? 'checked' : ''} onchange="S.set.whs[${i}].enabled=this.checked" style="width:auto"></div>
+      <div class="form-group"><button class="btn-danger btn-xs" onclick="S.set.whs.splice(${i},1);alRenderWebhooks()">✕</button></div>
+    </div>
+    <div class="form-group" style="margin-top:-8px"><label>Extra headers (one "Name: value" per line, e.g. Authorization)</label>
+      <textarea rows="1" style="font-family:var(--mono);font-size:.78rem" oninput="S.set.whs[${i}].headersText=this.value">${esc(Object.entries(w.headers || {}).map(([k, v]) => `${k}: ${v}`).join('\n'))}</textarea></div>`).join('') ||
+    '<div style="font-size:.8rem;color:var(--text-dim);margin-bottom:8px">No webhooks.</div>';
+}
+function alAddWebhook() { S.set.whs.push({ name: '', url: '', format: 'json', enabled: true, headers: {} }); alRenderWebhooks(); }
+function alBody() {
+  const v = id => document.getElementById(id).value;
+  const whs = S.set.whs.map(w => {
+    let headers = w.headers || {};
+    if (w.headersText !== undefined) {
+      headers = {};
+      for (const line of w.headersText.split('\n')) { const i = line.indexOf(':'); if (i > 0) headers[line.slice(0, i).trim()] = line.slice(i + 1).trim(); }
+    }
+    const { headersText, ...rest } = w;
+    return { ...rest, headers };
+  });
+  return {
+    email: { enabled: document.getElementById('al-em-on').checked, host: v('al-em-host').trim(), port: v('al-em-port'), security: v('al-em-sec'),
+      user: v('al-em-user').trim(), pass: v('al-em-pass'), from: v('al-em-from').trim(), to: v('al-em-to') },
+    webhooks: whs,
+    events: Object.fromEntries([...document.querySelectorAll('.al-ev')].map(c => [c.value, c.checked])),
+    thresholds: Object.fromEntries(['certDays', 'errorPct', 'deniedPct', 'windowMin', 'minRequests', 'offlineMin', 'driftMin'].map(k => [k, v(`al-t-${k}`)])),
+    cooldownMin: v('al-cool'),
+  };
+}
+async function alSave(quiet) {
+  const r = await apiFetch('/api/alerts', { method: 'PUT', body: alBody() });
+  if (!r || r.error) { toast(`❌ ${r?.error || 'failed'}`, 'error'); return false; }
+  if (!quiet) toast('Alert settings saved', 'success');
+  renderAlertSettings(r);
+  return true;
+}
+async function alTest() {
+  if (!(await alSave(true))) return;
+  const r = await apiFetch('/api/alerts/test', { method: 'POST' });
+  if (!r?.results?.length) { toast('Saved — but no channel is enabled', 'info'); return; }
+  const bad = r.results.filter(x => !x.ok);
+  toast(bad.length ? `❌ ${bad.map(x => `${x.channel}: ${x.error}`).join('; ')}` : `✅ Test sent via ${r.results.map(x => x.channel).join(', ')}`, bad.length ? 'error' : 'success');
+  renderSettings();
+}
+async function saveHealthDefaults() {
+  const body = Object.fromEntries(['interval', 'timeout', 'fall', 'rise'].map(k => [k, document.getElementById(`hd-${k}`).value]));
+  const r = await apiFetch('/api/health/settings', { method: 'PUT', body });
+  if (!r?.ok) { toast(`❌ ${r?.error || 'failed'}`, 'error'); return; }
+  toast(r.staged.length ? `Saved — staged on ${r.staged.join(', ')}; apply to send` : 'Saved', 'success');
+  loadAgents();
+}
+
 // ─── USAGE DASHBOARD ──────────────────────────────────
 // Colours validated (dataviz validator) against the card surface #1a1d27. Result stack order
 // allowed → other 4xx → 5xx → denied keeps the warning/serious pair apart (normal-vision ΔE ≥ 15).
@@ -3162,6 +3780,9 @@ function renderUsage() {
         <div class="uv-legend"><span><i class="line" style="background:${UV_BLUE}"></i>Median</span><span><i class="line" style="background:${UV_ORANGE}"></i>95th percentile</span></div>
         <div class="uv-chart" id="uv-lat"></div></div>
     </div>
+    ${d.series.some(p => p.conn != null) ? `<div class="uv-card"><h4>Active connections</h4><div class="sub">from stub_status via the helper, per ${fmtStep(d.step)}${d.scope === 'group' ? ' · summed over the group' : ''}</div>
+      <div class="uv-legend"><span><i class="line" style="background:${UV_BLUE}"></i>Average</span><span><i class="line" style="background:${UV_ORANGE}"></i>Peak</span></div>
+      <div class="uv-chart" id="uv-conn"></div></div>` : ''}
     <div class="uv-grid2">
       <div class="uv-card"><h4>Top sites</h4><div class="sub">requests</div><div id="uv-hosts"></div></div>
       <div class="uv-card"><h4>Top clients</h4><div class="sub">requests</div><div id="uv-clients"></div></div>
@@ -3173,6 +3794,7 @@ function renderUsage() {
   chartStacked(document.getElementById('uv-req'), d);
   chartLines(document.getElementById('uv-bw'), d, [{ k: 'bytes', label: 'Data sent', color: UV_BLUE, area: true }], formatBytes);
   chartLines(document.getElementById('uv-lat'), d, [{ k: 'p50', label: 'Median', color: UV_BLUE }, { k: 'p95', label: '95th percentile', color: UV_ORANGE }], fmtMs);
+  if (document.getElementById('uv-conn')) chartLines(document.getElementById('uv-conn'), d, [{ k: 'conn', label: 'Average', color: UV_BLUE, area: true }, { k: 'connMax', label: 'Peak', color: UV_ORANGE }], v => fmtN(v));
   topList('uv-hosts', d.top.hosts, e => e.denied || e.err ? `${e.denied ? `${fmtN(e.denied)} denied` : ''}${e.denied && e.err ? ', ' : ''}${e.err ? `${fmtN(e.err)} 5xx` : ''}` : '');
   topList('uv-clients', d.top.clients, e => e.denied ? `${fmtN(e.denied)} denied` : '');
   topList('uv-status', d.top.status, () => '');
@@ -3260,7 +3882,7 @@ function chartLines(el, d, defs, fmtY) {
     const segs = []; let cur = [];
     d.series.forEach((p, i) => {
       const v = p[s.k];
-      if (v == null || (s.k !== 'bytes' && !p.n)) { if (cur.length) segs.push(cur); cur = []; return; }
+      if (v == null || (['p50', 'p95'].includes(s.k) && !p.n)) { if (cur.length) segs.push(cur); cur = []; return; }
       cur.push([f.cx(i), f.y(v)]);
     });
     if (cur.length) segs.push(cur);

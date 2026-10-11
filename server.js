@@ -54,6 +54,13 @@ const logrx = require('./lib/logrx');
 const streams = require('./lib/streams');
 const { UsageStore } = require('./lib/usage');
 const { CveScanner } = require('./lib/cve');
+const { Users, atLeast } = require('./lib/users');
+const { AuditLog } = require('./lib/audit');
+const { History, changesBetween } = require('./lib/history');
+const groupsync = require('./lib/groupsync');
+const health = require('./lib/health');
+const { Alerts } = require('./lib/alerts');
+const fs = require('fs');
 const dgram = require('dgram');
 
 // ---------------------------------------------------------------------------
@@ -124,6 +131,38 @@ logReceiver.on('entries', ({ agentId, kind, entries }) => {
   if (kind === 'access') for (const e of entries) usage.record(agentId, e);
 });
 const cve = new CveScanner({ cacheFile: path.join(store.DATA_DIR, 'cve-cache.json') });
+const users = new Users({ file: path.join(store.DATA_DIR, 'users.json'), adminPassword: ADMIN_PASS });
+const audit = new AuditLog({ file: path.join(store.DATA_DIR, 'audit.log') });
+const history = new History({ dir: path.join(store.DATA_DIR, 'history') });
+const HEALTH_SETTINGS = path.join(store.DATA_DIR, 'health-settings.json');
+let healthSettings = health.loadSettings(HEALTH_SETTINGS);
+const healthState = new health.HealthState({ getSettings: () => healthSettings });
+const alerts = new Alerts({ file: path.join(store.DATA_DIR, 'alerts.json'), historyFile: path.join(store.DATA_DIR, 'alert-history.json'), stateFile: path.join(store.DATA_DIR, 'alert-state.json') });
+const HELPER_SOURCE = fs.readFileSync(path.join(__dirname, 'helper', 'nm-helper.py'), 'utf8');
+logReceiver.on('health', (agentId, msg) => healthState.receive(agentId, msg));
+healthState.on('status', (agentId, sample) => usage.recordConnections(agentId, sample.active));
+
+// Every apply goes through here (UI, REST, certificate deployments, group sync, rollback):
+// it refreshes the helper's target list, records history and the audit entry, and alerts on failure.
+const rawConfigApply = mp.configApply.bind(mp);
+mp.configApply = async (agentId, opts = {}) => {
+  const user = opts.user || 'system';
+  if (!opts.files) { try { await refreshHelperConfig(agentId); } catch (err) { console.warn('[nginx-manager] helper config:', err.message); } }
+  const result = await rawConfigApply(agentId, opts);
+  const agent = store.findAgent(agentId);
+  const label = opts.label || (opts.files ? 'Certificate deployment' : 'Apply');
+  if (result.success && !result.unchanged) {
+    history.record(agentId, store.currentFiles(store.readState(agentId)), { cause: 'apply', user, label, result: 'ok' });
+  }
+  if (!result.unchanged) {
+    audit.record({ user, action: opts.files ? 'certificate.deploy' : 'config.apply', agent: agent && agent.name, result: result.success ? 'ok' : 'failed', detail: opts.label || result.output || '' });
+  }
+  if (!result.success && agent) {
+    alerts.notify({ event: 'apply_failed', key: `apply_failed:${agentId}`, server: agent.name, group: agent.group || null,
+      title: `Config apply failed on ${agent.name}`, message: `${label} by ${user} failed — the server keeps its previous config.\n${result.output || ''}` }).catch(() => {});
+  }
+  return result;
+};
 
 // Multer — cert file uploads (PEM/CRT/KEY, max 1 MB each), kept in memory
 const certUpload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 1 * 1024 * 1024 } });
@@ -174,6 +213,11 @@ function fileStatus(st, name) {
   if (!d) return 'live';
   if (d.deleted) return 'deleted';
   return store.currentFile(st, name) ? 'modified' : 'added';
+}
+
+// private keys and htpasswd files: never shown in diffs, and only to admins in the editor
+function isSecret(name, content) {
+  return /PRIVATE KEY-----/.test(content || '') || /\.htpasswd$|privkey|\.key$/i.test(name);
 }
 
 function readFileContent(st, name) {
@@ -272,11 +316,67 @@ const sessionMiddleware = session({
 
 app.use(express.json({ limit: '10mb' }));
 app.use(sessionMiddleware);
+app.use(roleGate);
+app.use(auditTrail);
 app.use(express.static(path.join(__dirname, 'public')));
 
+// Re-checks the user on every request, so removing or demoting someone takes effect at once.
+function sessionUser(req) {
+  const s = req.session;
+  if (!s || !s.authenticated || !s.user) return null;
+  return users.lookup(s.user.username);
+}
+
 function requireAuth(req, res, next) {
-  if (req.session && req.session.authenticated) return next();
+  const u = sessionUser(req);
+  if (u) { req.user = u; return next(); }
+  if (req.session && req.session.authenticated) req.session.destroy(() => {});
   res.status(401).json({ error: 'Unauthorised' });
+}
+
+// Role needed per request: viewers read, operators change config, admins manage the manager itself.
+const ADMIN_ONLY = [
+  [/^\/api\/users/, 'ALL'], [/^\/api\/alerts/, 'ALL'], [/^\/api\/audit/, 'ALL'],
+  [/^\/api\/branding/, 'WRITE'], [/^\/api\/agents\/?$/, 'WRITE'], [/^\/api\/agents\/[^/]+\/?$/, 'DELETE'],
+  [/^\/api\/agents\/[^/]+\/token$/, 'WRITE'], [/^\/api\/agents\/[^/]+\/setup$/, 'ALL'],
+  [/^\/api\/health\/settings/, 'WRITE'],
+];
+const SELF_SERVICE = new Set(['/api/login', '/api/logout', '/api/me/password']);
+
+function requiredRole(req) {
+  const p = req.path, m = req.method;
+  const write = !['GET', 'HEAD', 'OPTIONS'].includes(m);
+  for (const [re, when] of ADMIN_ONLY) {
+    if (re.test(p) && (when === 'ALL' || (when === 'WRITE' && write) || when === m)) return 'admin';
+  }
+  return write ? 'operator' : 'viewer';
+}
+
+function roleGate(req, res, next) {
+  if (!req.path.startsWith('/api/') || SELF_SERVICE.has(req.path)) return next();
+  const u = sessionUser(req);
+  if (!u) return next();                                   // routes without requireAuth are public; the rest 401
+  const need = requiredRole(req);
+  if (!atLeast(u.role, need)) return res.status(403).json({ error: `Your role (${u.role}) can't do this — needs ${need}` });
+  next();
+}
+
+// Audit every change made through the API (bodies are never logged — they can carry secrets).
+function auditTrail(req, res, next) {
+  if (!req.path.startsWith('/api/') || ['GET', 'HEAD', 'OPTIONS'].includes(req.method) || SELF_SERVICE.has(req.path)) return next();
+  res.on('finish', () => {
+    const u = sessionUser(req);
+    if (!u) return;
+    const route = req.route ? req.baseUrl + req.route.path : req.path;
+    const agent = req.params && req.params.id ? store.findAgent(req.params.id) : null;
+    audit.record({
+      user: u.username, ip: req.ip, action: `${req.method} ${route}`,
+      agent: agent ? agent.name : undefined,
+      target: req.params && (req.params.name || req.params.siteId || req.params.snap || req.params.username) || undefined,
+      result: res.statusCode < 400 ? 'ok' : `HTTP ${res.statusCode}`,
+    });
+  });
+  next();
 }
 
 // ---------------------------------------------------------------------------
@@ -285,33 +385,63 @@ function requireAuth(req, res, next) {
 const loginFailures = new Map();   // ip -> { count, until }
 const MAX_FAILURES = 10, LOCKOUT_MS = 15 * 60 * 1000;
 
-async function checkPassword(password) {
-  if (typeof password !== 'string') return false;
-  if (/^\$2[aby]\$/.test(ADMIN_PASS)) return bcrypt.compare(password, ADMIN_PASS);
-  const a = crypto.createHash('sha256').update(password).digest();
-  const b = crypto.createHash('sha256').update(ADMIN_PASS).digest();
-  return crypto.timingSafeEqual(a, b);
-}
-
 app.post('/api/login', async (req, res) => {
   const ip = req.ip;
   const f = loginFailures.get(ip);
   if (f && f.count >= MAX_FAILURES && f.until > Date.now()) {
     return res.status(429).json({ error: 'Too many attempts — try again later' });
   }
-  if (!(await checkPassword(req.body && req.body.password))) {
+  const username = String((req.body && req.body.username) || 'admin').trim().toLowerCase();
+  const user = await users.verify(username, req.body && req.body.password);
+  if (!user) {
     const cur = f && f.until > Date.now() ? f : { count: 0 };
     loginFailures.set(ip, { count: cur.count + 1, until: Date.now() + LOCKOUT_MS });
-    return res.status(401).json({ error: 'Invalid password' });
+    audit.record({ user: username.slice(0, 64), ip, action: 'login', result: 'failed' });
+    return res.status(401).json({ error: 'Invalid username or password' });
   }
   loginFailures.delete(ip);
   req.session.regenerate(err => {
     if (err) return res.status(500).json({ error: 'Session error' });
     req.session.authenticated = true;
-    res.json({ ok: true });
+    req.session.user = { username: user.username };
+    audit.record({ user: user.username, ip, action: 'login', result: 'ok' });
+    res.json({ ok: true, user });
   });
 });
-app.post('/api/logout', (req, res) => { req.session.destroy(() => res.json({ ok: true })); });
+app.post('/api/logout', (req, res) => {
+  const u = sessionUser(req);
+  if (u) audit.record({ user: u.username, ip: req.ip, action: 'logout', result: 'ok' });
+  req.session.destroy(() => res.json({ ok: true }));
+});
+
+app.post('/api/me/password', requireAuth, async (req, res) => {
+  const { current, password } = req.body || {};
+  if (req.user.builtin) return res.status(400).json({ error: 'The built-in admin password is set with ADMIN_PASSWORD in .env' });
+  if (!(await users.verify(req.user.username, current))) return res.status(403).json({ error: 'Current password is wrong' });
+  try { users.update(req.user.username, { password }); } catch (err) { return sendError(res, err); }
+  audit.record({ user: req.user.username, ip: req.ip, action: 'user.password', target: req.user.username, result: 'ok' });
+  res.json({ ok: true });
+});
+
+// ---------------------------------------------------------------------------
+// Users (admin)
+// ---------------------------------------------------------------------------
+app.get('/api/users', requireAuth, (req, res) => res.json(users.list()));
+app.post('/api/users', requireAuth, (req, res) => {
+  try { res.json(users.create(req.body || {})); } catch (err) { sendError(res, err); }
+});
+app.put('/api/users/:username', requireAuth, (req, res) => {
+  const { role, password } = req.body || {};
+  if (req.params.username === req.user.username && role && role !== req.user.role) return res.status(400).json({ error: "You can't change your own role" });
+  try { res.json(users.update(req.params.username, { role, password: password || undefined })); } catch (err) { sendError(res, err); }
+});
+app.delete('/api/users/:username', requireAuth, (req, res) => {
+  if (req.params.username === req.user.username) return res.status(400).json({ error: "You can't remove yourself" });
+  try { users.remove(req.params.username); res.json({ ok: true }); } catch (err) { sendError(res, err); }
+});
+app.get('/api/audit', requireAuth, (req, res) => {
+  res.json(audit.query({ limit: Math.min(parseInt(req.query.limit, 10) || 200, 2000), user: req.query.user, agent: req.query.agent, action: req.query.action, q: req.query.q }));
+});
 // ---------------------------------------------------------------------------
 // Branding — app name, login text, logo (public read: the login screen needs it)
 // ---------------------------------------------------------------------------
@@ -363,7 +493,8 @@ app.post('/api/branding/reset', requireAuth, (req, res) => {
 });
 
 app.get('/api/me', (req, res) => {
-  res.json({ authenticated: !!(req.session && req.session.authenticated) });
+  const u = sessionUser(req);
+  res.json({ authenticated: !!u, user: u });
 });
 
 // ---------------------------------------------------------------------------
@@ -420,6 +551,8 @@ app.delete('/api/agents/:id', requireAuth, (req, res) => {
   store.writeAgents(remaining);
   store.removeAgentData(req.params.id);
   usage.forget(req.params.id);
+  history.forget(req.params.id);
+  healthState.forget(req.params.id);
   const call = mp.streams.get(req.params.id);
   if (call) { try { call.end(); } catch {} mp.streams.delete(req.params.id); }
   io.emit('agents');
@@ -460,7 +593,10 @@ const IPV4 = /^(25[0-5]|2[0-4]\d|1?\d?\d)(\.(25[0-5]|2[0-4]\d|1?\d?\d)){3}$/;
 function groupList() {
   const settings = store.readGroups();
   const names = new Set([...Object.keys(settings), ...store.readAgents().map(a => (a.group || '').trim()).filter(Boolean)]);
-  return [...names].map(name => ({ name, vip: (settings[name] || {}).vip || '', port: (settings[name] || {}).port || 443 }));
+  return [...names].map(name => ({
+    name, vip: (settings[name] || {}).vip || '', port: (settings[name] || {}).port || 443,
+    drift: (driftState.get(name) || {}).count || 0,
+  }));
 }
 
 const vipMonitor = new VipMonitor({
@@ -541,6 +677,7 @@ app.get('/api/agents/:id/file', requireAuth, (req, res) => {
   const content = readFileContent(st, name);
   if (content === null) return res.status(404).json({ error: 'File not found' });
   if (content === undefined) return res.status(409).json({ error: 'Contents not synced from the agent yet — run Sync' });
+  if (isSecret(name, content) && req.user.role !== 'admin') return res.status(403).json({ error: 'Private keys and password files are visible to admins only' });
   res.json({ name, content, status: fileStatus(st, name) });
 });
 
@@ -578,7 +715,7 @@ app.post('/api/agents/:id/discard', requireAuth, (req, res) => {
 
 app.post('/api/agents/:id/apply', requireAuth, async (req, res) => {
   const agent = requireAgent(req, res); if (!agent) return;
-  res.json(await mp.configApply(agent.id));
+  res.json(await mp.configApply(agent.id, { user: req.user.username, label: req.body && req.body.label }));
 });
 
 app.post('/api/agents/:id/sync', requireAuth, async (req, res) => {
@@ -830,6 +967,205 @@ app.delete('/api/agents/:id/logs', requireAuth, (req, res) => {
   res.json({ ok: true });
 });
 
+
+// ---------------------------------------------------------------------------
+// Config history & rollback (lib/history)
+// ---------------------------------------------------------------------------
+function blobText(hash) { const b = hash && store.getBlob(hash); return b ? b.toString('utf8') : null; }
+
+// unified diffs between two file maps; secrets are never shown
+function fileDiffs(a, b, names) {
+  return names.map(name => {
+    const x = a[name], y = b[name];
+    const tx = x ? blobText(x.hash) : '', ty = y ? blobText(y.hash) : '';
+    if (isSecret(name, tx) || isSecret(name, ty)) return { name, secret: true, changed: !x || !y || x.hash !== y.hash };
+    if (tx === null || ty === null) return { name, missing: true };
+    return { name, diff: unifiedDiff(tx, ty) };
+  });
+}
+
+// Snapshot the current file set whenever the agent reports a change (edits made on the server
+// itself show up here too). Waits until the contents are synced and no apply is running.
+const historyTimers = new Map();
+function scheduleHistory(agentId, delay = 5000) {
+  clearTimeout(historyTimers.get(agentId));
+  historyTimers.set(agentId, setTimeout(() => {
+    historyTimers.delete(agentId);
+    if (mp.busy && mp.busy.has(agentId)) return scheduleHistory(agentId, 10000);
+    const st = store.readState(agentId);
+    const files = store.currentFiles(st);
+    if (!Object.keys(files).length) return;
+    if (Object.values(files).some(f => !f.unmanaged && !store.hasBlob(f.hash))) return scheduleHistory(agentId, 15000);
+    const snap = history.record(agentId, files, { cause: history.list(agentId).length ? 'server' : 'baseline' });
+    if (snap && snap.cause === 'server') {
+      const agent = store.findAgent(agentId);
+      audit.record({ user: 'server', action: 'config.changed-on-server', agent: agent && agent.name, detail: snap.changes.map(c => `${c.change} ${c.name}`).join(', ').slice(0, 500) });
+    }
+    if (snap) io.emit('history', { agentId });
+  }, delay));
+}
+mp.on('files', agentId => scheduleHistory(agentId));
+for (const a of store.readAgents()) scheduleHistory(a.id, 15000);
+
+app.get('/api/agents/:id/history', requireAuth, (req, res) => {
+  const agent = requireAgent(req, res); if (!agent) return;
+  res.json(history.summaries(agent.id));
+});
+
+// ?against=previous (default) | current
+app.get('/api/agents/:id/history/:snap', requireAuth, (req, res) => {
+  const agent = requireAgent(req, res); if (!agent) return;
+  const snap = history.get(agent.id, req.params.snap);
+  if (!snap) return res.status(404).json({ error: 'Snapshot not found' });
+  let base, label;
+  if (req.query.against === 'current') {
+    const cur = store.currentFiles(store.readState(agent.id));
+    base = Object.fromEntries(Object.entries(cur).filter(([, f]) => !f.unmanaged).map(([n, f]) => [n, { hash: f.hash, permissions: f.permissions }]));
+    label = 'current';
+  } else {
+    const prev = history.previous(agent.id, snap.id);
+    base = prev ? prev.files : {};
+    label = prev ? prev.at : 'empty';
+  }
+  const changes = changesBetween(base, snap.files);
+  const { files, fp, ...meta } = snap;
+  res.json({ ...meta, against: label, fileCount: Object.keys(files).length, changes, diffs: fileDiffs(base, snap.files, changes.map(c => c.name)) });
+});
+
+// Stage the snapshot's file set (the user reviews and applies it like any other edit)
+app.post('/api/agents/:id/history/:snap/restore', requireAuth, (req, res) => {
+  const agent = requireAgent(req, res); if (!agent) return;
+  const snap = history.get(agent.id, req.params.snap);
+  if (!snap) return res.status(404).json({ error: 'Snapshot not found' });
+  const missing = Object.entries(snap.files).filter(([, f]) => !store.hasBlob(f.hash)).map(([n]) => n);
+  if (missing.length) return res.status(409).json({ error: `Contents missing for ${missing.join(', ')}` });
+  const st = store.readState(agent.id);
+  st.draft = {};
+  store.writeState(agent.id, st);
+  const cur = store.currentFiles(st);
+  let staged = 0, removed = 0;
+  for (const [name, f] of Object.entries(snap.files)) {
+    const c = cur[name];
+    if (!c || c.hash !== f.hash || (c.permissions || '0644') !== f.permissions) { store.stageBlob(agent.id, name, f); staged++; }
+  }
+  for (const [name, f] of Object.entries(cur)) {
+    if (!snap.files[name] && !f.unmanaged) { store.stageDelete(agent.id, name); removed++; }
+  }
+  audit.record({ user: req.user.username, ip: req.ip, action: 'config.rollback.staged', agent: agent.name, target: snap.id, detail: `to ${snap.at}: ${staged} file(s) restored, ${removed} removed` });
+  io.emit('files', { agentId: agent.id });
+  io.emit('agents');
+  res.json({ ok: true, staged, removed, label: `Rollback to ${snap.at.slice(0, 16).replace('T', ' ')} UTC` });
+});
+
+// ---------------------------------------------------------------------------
+// Group sync & drift (lib/groupsync)
+// ---------------------------------------------------------------------------
+function groupMembers(name) {
+  return store.readAgents().filter(a => (a.group || '').trim() === name);
+}
+
+function memberFiles(a) {
+  const files = store.currentFiles(store.readState(a.id));
+  return { id: a.id, name: a.name, files };
+}
+
+function groupIgnore(name) { return ((store.readGroups()[name] || {}).ignore) || []; }
+
+function groupDrift(name) {
+  const members = groupMembers(name);
+  if (members.length < 2) return { members: members.map(m => ({ id: m.id, name: m.name })), drift: [], inSync: true };
+  return groupsync.compare(members.map(memberFiles), { ignore: groupIgnore(name) });
+}
+
+app.get('/api/groups/:name/drift', requireAuth, (req, res) => {
+  const d = groupDrift(req.params.name);
+  const pending = Object.fromEntries(groupMembers(req.params.name).map(a => [a.id, Object.keys(store.readState(a.id).draft).length]));
+  res.json({ ...d, ignore: groupIgnore(req.params.name), pending });
+});
+
+app.put('/api/groups/:name/sync-settings', requireAuth, (req, res) => {
+  const ignore = (Array.isArray(req.body && req.body.ignore) ? req.body.ignore : String((req.body && req.body.ignore) || '').split('\n'))
+    .map(x => String(x).trim()).filter(Boolean);
+  if (ignore.some(p => !p.startsWith('/') || p.length > 300)) return res.status(400).json({ error: 'Ignore patterns are absolute paths, * and ** allowed' });
+  const groups = store.readGroups();
+  groups[req.params.name] = { ...(groups[req.params.name] || {}), ignore };
+  store.writeGroups(groups);
+  runDriftCheck();
+  res.json({ ok: true, ignore });
+});
+
+// diff of one file between two members
+app.get('/api/groups/:name/diff', requireAuth, (req, res) => {
+  const name = cleanRemotePath(req.query.file);
+  const a = store.findAgent(req.query.a), b = store.findAgent(req.query.b);
+  if (!name || !a || !b) return res.status(400).json({ error: 'file, a and b required' });
+  const fa = store.currentFile(store.readState(a.id), name), fb = store.currentFile(store.readState(b.id), name);
+  const [d] = fileDiffs(fa ? { [name]: fa } : {}, fb ? { [name]: fb } : {}, [name]);
+  res.json(d);
+});
+
+async function applyMembers(ids, user, label, logTo) {
+  const results = [];
+  for (const id of ids) {
+    const a = store.findAgent(id);
+    if (!Object.keys(store.readState(id).draft).length) { results.push({ id, name: a.name, success: true, output: 'nothing to apply' }); continue; }
+    if (logTo && logTo !== id) mp.log(logTo, `🔁 ${label}: applying on ${a.name}…`);
+    const r = await mp.configApply(id, { user, label });
+    results.push({ id, name: a.name, success: r.success, output: r.output });
+    if (logTo && logTo !== id) mp.log(logTo, `${r.success ? '✅' : '❌'} ${a.name}: ${r.output || ''}`);
+    if (!r.success) break;              // stop: leave the rest of the group on the known-good config
+  }
+  return results;
+}
+
+function stagePlans(plans) {
+  for (const p of plans) {
+    for (const f of p.stage) store.stageBlob(p.agentId, f.name, f);
+    for (const n of p.remove) store.stageDelete(p.agentId, n);
+    io.emit('files', { agentId: p.agentId });
+  }
+  io.emit('agents');
+}
+
+// Make the other members match a source member: { source, files?: [names], apply?: bool }
+app.post('/api/groups/:name/sync', requireAuth, async (req, res) => {
+  const members = groupMembers(req.params.name);
+  const src = members.find(m => m.id === (req.body && req.body.source));
+  if (!src) return res.status(400).json({ error: 'source must be a member of the group' });
+  const targets = members.filter(m => m.id !== src.id);
+  const files = Array.isArray(req.body.files) ? req.body.files.map(cleanRemotePath).filter(Boolean) : null;
+  let plans;
+  try { plans = groupsync.planSync(memberFiles(src), targets.map(memberFiles), { files, ignore: groupIgnore(req.params.name) }); stagePlans(plans); }
+  catch (err) { return sendError(res, err); }
+  audit.record({ user: req.user.username, ip: req.ip, action: 'group.sync.staged', target: req.params.name, detail: `from ${src.name}: ${plans.map(p => `${store.findAgent(p.agentId).name} +${p.stage.length}/-${p.remove.length}`).join(', ')}` });
+  const out = { ok: true, plans: plans.map(p => ({ id: p.agentId, staged: p.stage.length, removed: p.remove.length })) };
+  if (req.body.apply) out.results = await applyMembers(targets.map(t => t.id), req.user.username, `Group sync from ${src.name}`);
+  runDriftCheck();
+  res.json(out);
+});
+
+// Apply this server's pending edits here AND on the rest of its group
+app.post('/api/agents/:id/apply-group', requireAuth, async (req, res) => {
+  const agent = requireAgent(req, res); if (!agent) return;
+  const group = (agent.group || '').trim();
+  const members = group ? groupMembers(group) : [agent];
+  const others = members.filter(m => m.id !== agent.id);
+  const st = store.readState(agent.id);
+  if (!Object.keys(st.draft).length) return res.status(400).json({ error: 'No pending changes on this server' });
+  const { plans, conflicts } = groupsync.planPropagate(
+    { current: store.currentFiles(st), draft: st.draft }, others.map(memberFiles),
+    { force: !!(req.body && req.body.force), ignore: groupIgnore(group) });
+  if (conflicts.length) {
+    return res.status(409).json({ error: 'Some files differ on other members', conflicts: conflicts.map(c => ({ ...c, server: store.findAgent(c.agentId).name })) });
+  }
+  try { stagePlans(plans); } catch (err) { return sendError(res, err); }
+  const label = (req.body && req.body.label) || `Group apply from ${agent.name}`;
+  mp.log(agent.id, `🔁 Applying to ${members.length} server(s) in ${group || 'this server'}: ${members.map(m => m.name).join(', ')}`);
+  const results = await applyMembers([agent.id, ...others.map(o => o.id)], req.user.username, label, agent.id);
+  runDriftCheck();
+  res.json({ ok: results.every(r => r.success), results });
+});
+
 // ---------------------------------------------------------------------------
 // Usage dashboard — aggregated from the streamed request log (lib/usage)
 // ---------------------------------------------------------------------------
@@ -846,6 +1182,283 @@ app.get('/api/agents/:id/usage', requireAuth, (req, res) => {
   res.json({ scope: members.length > 1 || req.query.scope === 'group' ? 'group' : 'server', group: group || null,
     servers: logging, ...usage.query(members.map(a => a.id), String(req.query.range || '24h')) });
 });
+
+
+// ---------------------------------------------------------------------------
+// Backend health checks (run by the helper on each server — lib/health)
+// ---------------------------------------------------------------------------
+function agentConfTexts(agentId) {
+  const st = store.readState(agentId);
+  const desired = store.desiredFiles(st);
+  const out = {};
+  for (const n of Object.keys(desired)) {
+    if (!n.endsWith('.conf') || desired[n].certificateMeta) continue;
+    const t = readFileContent(st, n);
+    if (typeof t === 'string') out[n] = t;
+  }
+  return out;
+}
+
+function healthEnabled(agent) {
+  return !!store.desiredFiles(store.readState(agent.id))[health.helperPaths(nginxDir(agent)).config];
+}
+
+async function wantedHelperFiles(agent) {
+  const receiver = await receiverAddressFor(agent);
+  if (!receiver || !LOG_PORT) throw Object.assign(new Error("Can't work out the manager's address for this server — set LOG_RECEIVER_HOST"), { status: 409 });
+  const paths = health.helperPaths(nginxDir(agent));
+  return {
+    [paths.config]: health.helperConfig(health.deriveTargets(agentConfTexts(agent.id)), healthSettings, { receiver, port: LOG_PORT }),
+    [paths.status]: health.statusConf(),
+  };
+}
+
+// Keep helper.json in step with the config being applied (targets come from the upstreams)
+async function refreshHelperConfig(agentId) {
+  const agent = store.findAgent(agentId);
+  if (!agent || !healthEnabled(agent)) return;
+  const want = await wantedHelperFiles(agent);
+  const st = store.readState(agentId);
+  const paths = health.helperPaths(nginxDir(agent));
+  if (readFileContent(st, paths.config) !== want[paths.config]) store.stageFile(agentId, paths.config, want[paths.config], '0644', { pin: true });
+}
+
+app.get('/api/agents/:id/health', requireAuth, async (req, res) => {
+  const agent = requireAgent(req, res); if (!agent) return;
+  const st = store.readState(agent.id);
+  const paths = health.helperPaths(nginxDir(agent));
+  const desired = store.desiredFiles(st);
+  const enabled = !!desired[paths.config];
+  const pending = [paths.config, paths.status].some(p => st.draft[p]);
+  const targets = health.deriveTargets(agentConfTexts(agent.id));
+  const view = healthState.view(agent.id);
+  // the same backends as seen from the other members of the group
+  const group = (agent.group || '').trim();
+  const peers = group ? groupMembers(group).filter(m => m.id !== agent.id).map(m => ({ id: m.id, name: m.name, targets: healthState.view(m.id).targets })) : [];
+  res.json({
+    enabled, pending,
+    upToDate: !enabled || readFileContent(st, paths.config) === (await wantedHelperFiles(agent).catch(() => ({})))[paths.config],
+    helperVersion: health.HELPER_VERSION,
+    report: view.report, status: view.status,
+    defaults: healthSettings.defaults,
+    targets: targets.map(t => ({ ...t, settings: healthSettings.targets[t.key] || {}, state: view.targets[t.key] || null,
+      peers: peers.map(p => ({ id: p.id, name: p.name, state: p.targets[t.key] || null })) })),
+    installScript: req.user.role === 'admin' ? health.helperInstallScript(HELPER_SOURCE) : null,
+    files: paths,
+  });
+});
+
+app.post('/api/agents/:id/health', requireAuth, async (req, res) => {
+  const agent = requireAgent(req, res); if (!agent) return;
+  const paths = health.helperPaths(nginxDir(agent));
+  const st = store.readState(agent.id);
+  try {
+    if (req.body && req.body.enabled) {
+      const want = await wantedHelperFiles(agent);
+      // the status listener must not collide with another server block
+      const used = streams.listenPorts(Object.entries(agentConfTexts(agent.id)).filter(([n]) => n !== paths.status).map(([, t]) => t));
+      if (used.includes(health.STATUS_PORT)) throw Object.assign(new Error(`Port ${health.STATUS_PORT} is already used on this server`), { status: 409 });
+      store.stageFile(agent.id, paths.config, want[paths.config], '0644', { pin: true });
+      if (readFileContent(st, paths.status) !== want[paths.status]) store.stageFile(agent.id, paths.status, want[paths.status]);
+    } else {
+      for (const p of [paths.config, paths.status]) {
+        if (store.currentFile(st, p)) store.stageDelete(agent.id, p);
+        else { const s2 = store.readState(agent.id); delete s2.draft[p]; store.writeState(agent.id, s2); }
+      }
+    }
+  } catch (err) { return sendError(res, err); }
+  io.emit('files', { agentId: agent.id });
+  io.emit('agents');
+  res.json({ ok: true });
+});
+
+function saveHealthSettings() {
+  fs.writeFileSync(HEALTH_SETTINGS, JSON.stringify(healthSettings, null, 2), { mode: 0o600 });
+}
+
+// after a settings change, stage the new helper.json on every server that has health checks on
+async function restageHelpers() {
+  const changed = [];
+  for (const a of store.readAgents()) {
+    if (!healthEnabled(a)) continue;
+    const before = Object.keys(store.readState(a.id).draft).length;
+    await refreshHelperConfig(a.id).catch(() => {});
+    if (Object.keys(store.readState(a.id).draft).length !== before) { changed.push(a.name); io.emit('files', { agentId: a.id }); }
+  }
+  io.emit('agents');
+  return changed;
+}
+
+app.put('/api/health/settings', requireAuth, async (req, res) => {
+  try { healthSettings = { ...healthSettings, defaults: health.validateDefaults({ ...healthSettings.defaults, ...(req.body || {}) }) }; }
+  catch (err) { return sendError(res, err); }
+  saveHealthSettings();
+  res.json({ ok: true, defaults: healthSettings.defaults, staged: await restageHelpers() });
+});
+
+// per-backend check: { type: tcp|http, path, expect, hostHeader, tls, disabled }
+app.put('/api/health/targets', requireAuth, async (req, res) => {
+  const key = String((req.body && req.body.key) || '');
+  if (!key || key.length > 300) return res.status(400).json({ error: 'key required' });
+  try {
+    const v = health.validateTargetSettings(req.body.settings || {});
+    healthSettings.targets[key] = v;
+    if (!Object.keys(v).length || (v.type === 'tcp' && !v.disabled)) delete healthSettings.targets[key];
+  } catch (err) { return sendError(res, err); }
+  saveHealthSettings();
+  res.json({ ok: true, staged: await restageHelpers() });
+});
+
+healthState.on('transition', ({ agentId, key, from, to, error }) => {
+  io.emit('health', { agentId });
+  const agent = store.findAgent(agentId);
+  if (!agent) return;
+  if (to === 'down') {
+    mp.log(agentId, `💔 Backend ${key} is DOWN (${error || 'failed'}) — seen from ${agent.name}`);
+    alerts.notify({ event: 'backend_down', key: `backend:${agentId}:${key}`, server: agent.name, group: agent.group || null,
+      title: `Backend ${key} is down (from ${agent.name})`, message: `${agent.name} can't reach ${key}: ${error || 'check failed'}.` }).catch(() => {});
+  } else if (to === 'up' && from === 'down') {
+    mp.log(agentId, `💚 Backend ${key} is back up`);
+    alerts.notify({ event: 'backend_down', key: `backend:${agentId}:${key}`, recovery: true, server: agent.name, group: agent.group || null,
+      title: `Backend ${key} recovered (from ${agent.name})`, message: `${agent.name} can reach ${key} again.` }).catch(() => {});
+  }
+});
+let healthEmitTimer = null;
+logReceiver.on('health', agentId => {     // live refresh of the Health tab, at most every 5 s
+  if (healthEmitTimer) return;
+  healthEmitTimer = setTimeout(() => { healthEmitTimer = null; io.emit('health', { agentId }); }, 5000);
+});
+
+// ---------------------------------------------------------------------------
+// Alerts (lib/alerts) — settings, test, history; triggers are wired below
+// ---------------------------------------------------------------------------
+app.get('/api/alerts', requireAuth, (req, res) => res.json(alerts.view()));
+app.put('/api/alerts', requireAuth, (req, res) => {
+  try { res.json(alerts.update(req.body || {})); } catch (err) { sendError(res, err); }
+});
+app.post('/api/alerts/test', requireAuth, async (req, res) => {
+  const r = await alerts.notify({ event: 'test', key: `test:${Date.now()}`, title: 'Test alert from nginx-manager',
+    message: `Sent by ${req.user.username}. If you can read this, alerts are working.` });
+  res.json(r);
+});
+app.get('/api/alerts/history', requireAuth, (req, res) => res.json(alerts.history(200)));
+
+// --- triggers ---------------------------------------------------------------
+const driftState = new Map();     // group -> { count, since, fp }
+function runDriftCheck() {
+  let changed = false;
+  for (const g of new Set(store.readAgents().map(a => (a.group || '').trim()).filter(Boolean))) {
+    if (groupMembers(g).length < 2) { if (driftState.delete(g)) changed = true; continue; }
+    const d = groupDrift(g);
+    const fp = d.drift.map(f => f.name).join('|');
+    const prev = driftState.get(g);
+    if (!d.drift.length) {
+      if (prev) {
+        driftState.delete(g); changed = true;
+        if (prev.alerted) alerts.notify({ event: 'drift', key: `drift:${g}`, recovery: true, group: g, title: `Group ${g} is back in sync`, message: 'All members have identical config again.' }).catch(() => {});
+      }
+      continue;
+    }
+    const cur = prev && prev.fp === fp ? prev : { count: d.drift.length, since: Date.now(), fp, alerted: prev && prev.alerted };
+    cur.count = d.drift.length;
+    if (!prev || prev.count !== cur.count) changed = true;
+    if (!cur.alerted && Date.now() - cur.since >= alerts.settings.thresholds.driftMin * 60e3) {
+      cur.alerted = true;
+      alerts.notify({ event: 'drift', key: `drift:${g}`, remindMin: 24 * 60, group: g, title: `Config drift in group ${g}`,
+        message: `${d.drift.length} file(s) differ between ${d.members.map(m => m.name).join(' and ')}:\n${d.drift.slice(0, 20).map(f => `  ${f.name}`).join('\n')}` }).catch(() => {});
+    }
+    driftState.set(g, cur);
+  }
+  if (changed) io.emit('groups');
+}
+
+const offlineSince = new Map();
+function checkOffline() {
+  const mins = alerts.settings.thresholds.offlineMin;
+  for (const a of store.readAgents()) {
+    if (mp.isOnline(a.id)) {
+      if (offlineSince.has(a.id)) {
+        offlineSince.delete(a.id);
+        alerts.notify({ event: 'agent_offline', key: `offline:${a.id}`, recovery: true, server: a.name, group: a.group || null,
+          title: `${a.name} is back online`, message: `NGINX Agent on ${a.name} reconnected.` }).catch(() => {});
+      }
+      continue;
+    }
+    if (!a.lastSeen) continue;                               // never enrolled
+    if (!offlineSince.has(a.id)) offlineSince.set(a.id, Date.now());
+    if (Date.now() - offlineSince.get(a.id) >= mins * 60e3) {
+      alerts.notify({ event: 'agent_offline', key: `offline:${a.id}`, remindMin: 24 * 60, server: a.name, group: a.group || null,
+        title: `${a.name} is offline`, message: `NGINX Agent on ${a.name} has not been connected for ${mins}+ minutes (last seen ${a.lastSeen}). The server itself may still be serving traffic.` }).catch(() => {});
+    }
+  }
+}
+
+const spikeState = new Map();      // `${kind}:${agentId}` -> true while alerted
+function checkSpikes() {
+  const t = alerts.settings.thresholds;
+  for (const a of store.readAgents()) {
+    const q = usage.query([a.id], '1h');
+    const recent = q.series.slice(-t.windowMin);
+    const n = recent.reduce((x, p) => x + p.n, 0);
+    for (const [kind, field, pct, event] of [['5xx', 'server_error', t.errorPct, 'error_spike'], ['denied', 'denied', t.deniedPct, 'denied_spike']]) {
+      const k = `${kind}:${a.id}`;
+      const bad = recent.reduce((x, p) => x + p[field], 0);
+      const ratio = n ? (100 * bad) / n : 0;
+      if (n >= t.minRequests && ratio >= pct && !spikeState.get(k)) {
+        spikeState.set(k, true);
+        alerts.notify({ event, key: `${event}:${a.id}`, server: a.name, group: a.group || null,
+          title: `${ratio.toFixed(0)}% ${kind === '5xx' ? '5xx errors' : 'denied requests'} on ${a.name}`,
+          message: `${bad} of ${n} requests in the last ${t.windowMin} minutes were ${kind === '5xx' ? 'server errors' : 'denied (401/403/407/429/444)'} (threshold ${pct}%).` }).catch(() => {});
+      } else if (spikeState.get(k) && (n < t.minRequests || ratio < pct / 2)) {
+        spikeState.delete(k);
+        alerts.notify({ event, key: `${event}:${a.id}`, recovery: true, server: a.name, group: a.group || null,
+          title: `${kind === '5xx' ? '5xx errors' : 'Denied requests'} back to normal on ${a.name}`, message: `${ratio.toFixed(1)}% over the last ${t.windowMin} minutes.` }).catch(() => {});
+      }
+    }
+  }
+}
+
+function checkCertificates() {
+  const days = alerts.settings.thresholds.certDays;
+  for (const c of certManager.list()) {
+    const st = c.status || {};
+    if (st.state === 'error' || st.state === 'warning') {
+      alerts.notify({ event: 'cert_failed', key: `certfail:${c.id}`, remindMin: 12 * 60, title: `Certificate ${c.name || c.id}: ${st.message || 'renewal failed'}`,
+        message: `${st.lastError || st.message || ''}\nThe certificate manager retries automatically; the current certificate stays in place until it expires.` }).catch(() => {});
+    }
+  }
+  for (const a of store.readAgents()) {
+    const st = store.readState(a.id);
+    for (const [name, f] of Object.entries(store.currentFiles(st))) {
+      const na = f.certificateMeta && f.certificateMeta.notAfter;
+      if (!na) continue;
+      const left = (Date.parse(na) - Date.now()) / 86400e3;
+      if (left <= days) {
+        alerts.notify({ event: 'cert_expiring', key: `certexp:${a.id}:${name}`, remindMin: 24 * 60, server: a.name, group: a.group || null,
+          title: `Certificate on ${a.name} ${left < 0 ? 'has expired' : `expires in ${Math.max(0, Math.floor(left))} day(s)`}`,
+          message: `${name}\nExpires ${na}.` }).catch(() => {});
+      }
+    }
+  }
+}
+
+function checkCves() {
+  for (const a of store.readAgents()) {
+    const r = cve.assess(a, agentConfigText(a.id));
+    const affected = [...((r.nginx && r.nginx.findings) || []), ...((r.agent && r.agent.findings) || [])].filter(f => f.status === 'affected');
+    for (const f of affected) {
+      alerts.notify({ event: 'cve_new', key: `cve:${a.id}:${f.id}`, remindMin: 7 * 24 * 60, server: a.name, group: a.group || null,
+        title: `${f.cves[0] || f.id} affects ${a.name} (${f.severity})`,
+        message: `${f.title}\n${r.nginx ? `nginx ${r.nginx.version}` : ''}${f.fixedIn ? ` — fixed in ${f.fixedIn}` : ''}\n${f.advisory || ''}` }).catch(() => {});
+    }
+  }
+}
+
+setInterval(() => { try { runDriftCheck(); } catch (e) { console.warn('[nginx-manager] drift check:', e.message); } }, 60e3).unref();
+setInterval(() => { try { checkOffline(); checkSpikes(); } catch (e) { console.warn('[nginx-manager] alert checks:', e.message); } }, 30e3).unref();
+setInterval(() => { try { checkCertificates(); checkCves(); } catch (e) { console.warn('[nginx-manager] alert checks:', e.message); } }, 30 * 60e3).unref();
+setTimeout(() => { try { runDriftCheck(); checkCertificates(); } catch {} }, 30e3).unref();
+cve.on('change', () => { try { checkCves(); } catch {} });
 
 // ---------------------------------------------------------------------------
 // CVE detection (lib/cve) — nginx.org advisories + OSV for nginx-agent
@@ -1232,6 +1845,7 @@ function splitSiteId(id) {
 function discoveredSites(agent) {
   const { st, files } = parsedConfFiles(agent.id);
   const managedPaths = new Set(builderSites(agent.id).map(s => s.confPath || siteConfPath(agent, s)));
+  const zones = proxyfile.parseLimitZones(readFileContent(st, limitsPath(agent)) || '');
   const out = [];
   for (const f of files) {
     if (managedPaths.has(f.path)) continue;
@@ -1246,6 +1860,7 @@ function discoveredSites(agent) {
       continue;
     }
     for (const x of sites) {
+      if (x.rateLimit) x.rateLimit.rate = zones.get(x.rateLimit.zone) || null;
       out.push({
         ...x,
         id: siteId(f.path, x.key),
@@ -1275,6 +1890,9 @@ function proxyFields(b) {
   for (const k of ['ssl', 'hsts', 'websockets', 'httpRedirect']) if (b[k] !== undefined) f[k] = !!b[k];
   if (b.proxyReadTimeout !== undefined) f.proxyReadTimeout = b.proxyReadTimeout === '' || b.proxyReadTimeout === null ? '' : String(b.proxyReadTimeout);
   if (b.listenPort !== undefined) f.listenPort = parseInt(b.listenPort, 10);
+  if (b.rateLimit !== undefined) f.rateLimit = b.rateLimit ? { rate: String(b.rateLimit.rate || '').trim(), burst: parseInt(b.rateLimit.burst, 10) || 0 } : null;
+  if (b.connLimit !== undefined) f.connLimit = b.connLimit === null || b.connLimit === '' ? null : parseInt(b.connLimit, 10);
+  if (b.sso !== undefined) f.sso = b.sso ? { authUrl: String(b.sso.authUrl || '').trim(), signinUrl: String(b.sso.signinUrl || '').trim() } : null;
   if (b.certId) {
     const cert = deriveCerts(b._agentId).find(c => c.id === b.certId);
     if (cert) { f.certFile = cert.remoteCertPath; f.keyFile = cert.remoteKeyPath || f.keyFile; }
@@ -1283,7 +1901,33 @@ function proxyFields(b) {
 }
 
 // Compute the new contents of the target file for a create/edit, without saving.
+function limitsPath(agent) { return path.posix.join(confDir(agent), '00-nginx-manager-limits.conf'); }
+
+// The site edit plus the http-level zones file it may need (created/updated/removed)
 function planProxyChange(agent, siteIdOrNull, body) {
+  const plan = planProxySite(agent, siteIdOrNull, body);
+  const f = plan.fields;
+  const st = store.readState(agent.id);
+  const lp = limitsPath(agent);
+  const limitsBefore = readFileContent(st, lp);
+  const zones = proxyfile.parseLimitZones(limitsBefore || '');
+  if (f.rateLimit) zones.set(plan.rateZone, f.rateLimit.rate);
+  const texts = Object.entries(agentConfTexts(agent.id)).filter(([n]) => n !== plan.path && n !== lp).map(([, t]) => t);
+  const limitsAfter = proxyfile.limitsFileText([...texts, plan.after], zones);
+  if ((limitsBefore || null) !== limitsAfter) plan.extra = { path: lp, before: limitsBefore || '', after: limitsAfter };
+  return plan;
+}
+
+function stageProxyPlan(agent, plan) {
+  if (plan.after !== plan.before) store.stageFile(agent.id, plan.path, plan.after);
+  if (plan.extra) {
+    if (plan.extra.after) store.stageFile(agent.id, plan.extra.path, plan.extra.after);
+    else if (store.currentFile(store.readState(agent.id), plan.extra.path)) store.stageDelete(agent.id, plan.extra.path);
+    else { const s2 = store.readState(agent.id); delete s2.draft[plan.extra.path]; store.writeState(agent.id, s2); }
+  }
+}
+
+function planProxySite(agent, siteIdOrNull, body) {
   const f = proxyFields({ ...body, _agentId: agent.id });
   const ctx = { connectionUpgradeMap: hasConnectionUpgradeMap(agent.id) };
   const st = store.readState(agent.id);
@@ -1299,8 +1943,11 @@ function planProxyChange(agent, siteIdOrNull, body) {
       const clash = f.serverName.split(/\s+/).find(n => taken.has(n) && !mine.has(n));
       if (clash) throw Object.assign(new Error(`${clash} is already used by another site`), { status: 409 });
     }
+    const current = proxyfile.findSites(before).find(x => x.key === ref.key);
+    ctx.rateZone = (current && current.rateLimit && /^nm_rl_/.test(current.rateLimit.zone)) ? current.rateLimit.zone
+      : proxyfile.rateZoneName((f.serverName || (current && current.serverName) || ''));
     const after = proxyfile.editSite(before, ref.key, f, ctx);
-    return { path: ref.confPath, before, after };
+    return { path: ref.confPath, before, after, fields: f, rateZone: ctx.rateZone };
   }
   const target = reverseProxiesPath(agent);
   const existing = readFileContent(st, target);
@@ -1309,8 +1956,9 @@ function planProxyChange(agent, siteIdOrNull, body) {
   const taken = allServerNames(agent);
   const clash = (f.serverName || '').split(/\s+/).find(n => n && taken.has(n));
   if (clash) throw Object.assign(new Error(`${clash} is already used by another site`), { status: 409 });
+  ctx.rateZone = proxyfile.rateZoneName(f.serverName || '');
   const after = proxyfile.addSite(before, f, ctx);
-  return { path: target, before, after, created: existing === null };
+  return { path: target, before, after, created: existing === null, fields: f, rateZone: ctx.rateZone };
 }
 
 function sendError(res, err) {
@@ -1332,7 +1980,8 @@ app.post('/api/agents/:id/proxies/preview', requireAuth, (req, res) => {
   const agent = requireAgent(req, res); if (!agent) return;
   try {
     const plan = planProxyChange(agent, req.body && req.body.siteId, req.body || {});
-    res.json({ path: plan.path, created: !!plan.created, diff: unifiedDiff(plan.before, plan.after) });
+    res.json({ path: plan.path, created: !!plan.created, diff: unifiedDiff(plan.before, plan.after),
+      extra: plan.extra ? { path: plan.extra.path, diff: unifiedDiff(plan.extra.before, plan.extra.after || '') } : null });
   } catch (err) { sendError(res, err); }
 });
 
@@ -1341,7 +1990,7 @@ app.post('/api/agents/:id/proxies', requireAuth, (req, res) => {
   const agent = requireAgent(req, res); if (!agent) return;
   try {
     const plan = planProxyChange(agent, null, req.body || {});
-    store.stageFile(agent.id, plan.path, plan.after);
+    stageProxyPlan(agent, plan);
     io.emit('files', { agentId: agent.id });
     io.emit('agents');
     res.json({ ok: true, path: plan.path, created: !!plan.created });
@@ -1353,7 +2002,7 @@ app.put('/api/agents/:id/proxies', requireAuth, (req, res) => {
   const agent = requireAgent(req, res); if (!agent) return;
   try {
     const plan = planProxyChange(agent, req.body && req.body.siteId, req.body || {});
-    if (plan.after !== plan.before) store.stageFile(agent.id, plan.path, plan.after);
+    stageProxyPlan(agent, plan);
     io.emit('files', { agentId: agent.id });
     io.emit('agents');
     res.json({ ok: true, path: plan.path, changed: plan.after !== plan.before });
@@ -1460,8 +2109,7 @@ app.post('/api/agents/:id/sites/preview', requireAuth, (req, res) => {
 // ---------------------------------------------------------------------------
 io.engine.use(sessionMiddleware);
 io.use((socket, next) => {
-  const s = socket.request.session;
-  if (s && s.authenticated) return next();
+  if (sessionUser(socket.request)) return next();
   next(new Error('unauthorised'));
 });
 
@@ -1475,23 +2123,26 @@ certManager.on('change', id => io.emit('managedcerts', { id }));
 certManager.on('log', (id, line) => io.emit('certlog', { id, line }));
 vipMonitor.on('failover', ({ group, from, to, at }) => {
   console.log(`[nginx-manager] VIP failover in ${group}: ${from} -> ${to}`);
+  alerts.notify({ event: 'vip_failover', key: `vip:${group}:${to}`, group, title: `VIP for ${group} moved to ${to}`,
+    message: `The keepalived VIP for group ${group} moved from ${from} to ${to} at ${at}.` }).catch(() => {});
   for (const a of store.readAgents().filter(x => (x.group || '').trim() === group)) {
     io.emit('log', { agentId: a.id, text: `🔀 VIP for ${group} moved from ${from} to ${to} at ${at}\n` });
   }
 });
 
 io.on('connection', (socket) => {
-  const authed = () => socket.request.session && socket.request.session.authenticated;
-  const op = (name, fn) => socket.on(name, async ({ agentId } = {}) => {
-    if (!authed()) { socket.emit('done', { op: name, agentId, success: false, output: 'Not authenticated' }); return; }
+  const op = (name, fn, role = 'viewer') => socket.on(name, async ({ agentId, label } = {}) => {
+    const u = sessionUser(socket.request);
+    if (!u) { socket.emit('done', { op: name, agentId, success: false, output: 'Not authenticated' }); return; }
+    if (!atLeast(u.role, role)) { socket.emit('done', { op: name, agentId, success: false, output: `Your role (${u.role}) can't do this` }); return; }
     const agent = store.findAgent(agentId);
     if (!agent) { socket.emit('done', { op: name, agentId, success: false, output: 'Server not found' }); return; }
-    const result = await fn(agent);
+    const result = await fn(agent, u, { label });
     socket.emit('done', { op: name, agentId, ...result });
   });
 
-  op('apply', agent => mp.configApply(agent.id));
-  op('sync',  agent => mp.configUpload(agent.id));
+  op('apply', (agent, u, o) => mp.configApply(agent.id, { user: u.username, label: o.label }), 'operator');
+  op('sync',  (agent, u) => { audit.record({ user: u.username, action: 'config.sync', agent: agent.name }); return mp.configUpload(agent.id); }, 'operator');
   op('status', async agent => {
     if (!mp.isOnline(agent.id)) return { success: false, output: 'Agent is not connected' };
     mp.requestHealth(agent.id);

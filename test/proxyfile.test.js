@@ -229,3 +229,49 @@ test('replaceCertPaths swaps only matching ssl_certificate(_key) values', () => 
   assert.deepEqual(changedLines(FIXTURE, text).filter(l => l.startsWith('+')).every(l => /ssl_certificate(_key)? \/etc\/nginx\/ssl\//.test(l)), true);
   assert.equal(pf.replaceCertPaths(FIXTURE, { '/nope': '/x' }).count, 0);
 });
+
+test('per-site rate limit, connection limit and SSO: add, edit, remove; limits file', () => {
+  const pf2 = require('../lib/proxyfile');
+  const base = pf2.addSite('', { name: 'App', serverName: 'app.example.com', backends: ['192.0.2.5:8080'], ssl: true,
+    certFile: '/etc/nginx/ssl/a.pem', keyFile: '/etc/nginx/ssl/a.key' }, {});
+  const key = pf2.findSites(base)[0].key;
+  const on = pf2.editSite(base, key, { rateLimit: { rate: '10r/s', burst: 20 }, connLimit: 30,
+    sso: { authUrl: 'http://192.0.2.9:9091/api/authz/auth-request', signinUrl: 'https://auth.example.com/' } }, { rateZone: 'nm_rl_app_example_com' });
+  assert.match(on, /limit_req zone=nm_rl_app_example_com burst=20 nodelay;/);
+  assert.match(on, /limit_conn nm_conn_addr 30;/);
+  assert.match(on, /location = \/internal\/nm-sso \{[\s\S]*internal;[\s\S]*proxy_pass http:\/\/192\.0\.2\.9:9091\/api\/authz\/auth-request;/);
+  assert.match(on, /location \/ \{\n        # SSO \(nginx-manager\)\n        auth_request \/internal\/nm-sso;/);
+  assert.match(on, /error_page 401 =302 https:\/\/auth\.example\.com\/\?rd=\$scheme:\/\/\$http_host\$request_uri;/);
+  const s = pf2.findSites(on)[0];
+  assert.deepStrictEqual(s.rateLimit, { zone: 'nm_rl_app_example_com', burst: 20, nodelay: true });
+  assert.strictEqual(s.connLimit, 30);
+  assert.deepStrictEqual(s.sso, { authUrl: 'http://192.0.2.9:9091/api/authz/auth-request', signinUrl: 'https://auth.example.com/' });
+  // edit values in place
+  const edited = pf2.editSite(on, key, { rateLimit: { rate: '5r/s', burst: 5 }, connLimit: 10, sso: { authUrl: 'http://192.0.2.10:9000/outpost.goauthentik.io/auth/nginx', signinUrl: 'https://auth.example.com/' } }, { rateZone: 'nm_rl_app_example_com' });
+  assert.strictEqual(pf2.findSites(edited)[0].rateLimit.burst, 5);
+  assert.strictEqual(pf2.findSites(edited)[0].connLimit, 10);
+  assert.match(pf2.findSites(edited)[0].sso.authUrl, /goauthentik/);
+  assert.strictEqual((edited.match(/auth_request /g) || []).length, 1);
+  // remove everything → back to the original site
+  const off = pf2.editSite(edited, key, { rateLimit: null, connLimit: null, sso: null }, {});
+  const s2 = pf2.findSites(off)[0];
+  assert.strictEqual(s2.rateLimit, null); assert.strictEqual(s2.connLimit, null); assert.strictEqual(s2.sso, null);
+  assert.doesNotMatch(off, /nm_sso|nm-sso|limit_|SSO/);
+  // zones file
+  const zones = new Map([['nm_rl_app_example_com', '5r/s'], ['nm_rl_gone', '1r/s']]);
+  const lf = pf2.limitsFileText([edited], zones);
+  assert.match(lf, /limit_conn_zone \$binary_remote_addr zone=nm_conn_addr:10m;/);
+  assert.match(lf, /limit_req_zone \$binary_remote_addr zone=nm_rl_app_example_com:10m rate=5r\/s;/);
+  assert.doesNotMatch(lf, /nm_rl_gone/);
+  assert.deepStrictEqual([...pf2.parseLimitZones(lf)], [['nm_rl_app_example_com', '5r/s']]);
+  assert.strictEqual(pf2.limitsFileText([off], zones), null);
+  // new site with everything on
+  const fresh = pf2.addSite('', { name: 'B', serverName: 'b.example.com', backends: ['192.0.2.6:80'], ssl: false, rateLimit: { rate: '2r/s', burst: 0 },
+    sso: { authUrl: 'http://192.0.2.9:9091/api/authz/auth-request', signinUrl: 'https://auth.example.com/?x=1' } }, { rateZone: 'nm_rl_b' });
+  const fs3 = pf2.findSites(fresh)[0];
+  assert.strictEqual(fs3.rateLimit.zone, 'nm_rl_b');
+  assert.strictEqual(fs3.sso.signinUrl, 'https://auth.example.com/?x=1');
+  assert.match(fresh, /&rd=\$scheme/);
+  assert.throws(() => pf2.editSite(base, key, { rateLimit: { rate: 'fast', burst: 1 } }, {}), /Rate limit/);
+  assert.throws(() => pf2.editSite(base, key, { sso: { authUrl: 'http://x/;evil', signinUrl: 'https://a/' } }, {}), /SSO/);
+});

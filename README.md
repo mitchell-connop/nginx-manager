@@ -20,6 +20,12 @@ Built for ConnopNetworking homelab infrastructure.
 - 🔄 **Live, no scanning** — the Builder, Certificates and Raw Configs tabs are derived from what the agent reports, so hand edits on the server show up within seconds (agent file watcher)
 - 📈 **Usage dashboard** — requests by result (allowed / 4xx / 5xx / denied), data sent, median and p95 response time, top sites, clients, status codes, upstreams and RTSP streams, over 1 h – 30 days, per server or per group. Built from the streamed request log (enable it in Log → Connections); per-minute buckets for 48 h and hourly for 30 days in `data/usage/`
 - 🛡️ **CVE detection** — matches each server's nginx version against the [nginx.org security advisories](https://nginx.org/en/security_advisories.html) and nginx-agent against [OSV.dev](https://osv.dev). Module-specific advisories (HTTP/3, mp4, SSI, map regex…) are checked against the server's config, so a vulnerable version whose module isn't used is shown as such. Shows the version that fixes everything that applies; sources refresh daily (outbound HTTPS from the manager). OS packages aren't covered
+- 🔁 **Group sync & drift detection** — members of a group (e.g. a keepalived pair) are compared continuously; the sidebar flags drift, **Compare & sync** shows which files differ (with diffs) and copies the right version to the others, and **Apply → Whole group** carries one server's edits to every member, one at a time, stopping at the first failure. Files changed separately on another member are flagged as conflicts instead of being overwritten. Per-group ignore patterns for files meant to differ
+- 🕘 **Config history & rollback** — a snapshot every time a server's files change (applied here, or edited on the server itself), with who, what and a diff; **Restore** stages any earlier version for review and apply
+- ❤️ **Backend health checks from the data plane** — a small helper on each nginx server (`helper/nm-helper.py`, unprivileged systemd unit, Python stdlib only) probes every upstream/`proxy_pass` backend (TCP or HTTP, per-backend settings) and reads a loopback-only `stub_status`, reporting over the same UDP port as the request log. The manager never needs to reach the backends, so it can sit in a separate control-plane network. Up/down with fall/rise thresholds, 24 h availability, live connections
+- 🔔 **Alerts** — email (SMTP: STARTTLS/TLS/plain) and webhooks (generic JSON, Slack/Mattermost, Discord, ntfy, Teams) for VIP failover, server offline, failed applies, certificate renewal failures and expiry, new CVEs, backends down/recovered, 5xx and denied-request spikes, and group drift — with cool-downs and recovery messages
+- 🛡️ **Per-site protection** in the reverse-proxy popup — rate limiting (`limit_req`, zone per site in `conf.d/00-nginx-manager-limits.conf`), concurrent-connection limits, and SSO via `auth_request` (presets for Authelia, Authentik and oauth2-proxy; Remote-User/Groups/Email/Name passed to the backend)
+- 👥 **Users, roles & audit log** — viewer (read-only, never sees private keys), operator (edit/apply/rollback/sync), admin (users, alerts, branding, enrolment). The built-in `admin` account uses `ADMIN_PASSWORD`; others are bcrypt-hashed in `data/users.json`. Every change through the API, every apply and every login is recorded in `data/audit.log`
 - 📊 **Status** — agent connection, nginx version and instance health
 - 🎨 **Branding** — your own logo (also the browser tab icon), app name and login text; stored in `data/` so updates keep it
 - 🖥️ **Live log** — Socket.IO real-time operation output (session-authenticated)
@@ -80,7 +86,7 @@ node server.js
 Lost the token? **🔑 Agent Setup → New Token** issues a new one (the old one stops working immediately).
 
 Make sure the nginx servers can reach the manager on `GRPC_PORT` (default 8443/tcp), and on `LOG_RECEIVER_PORT`
-(default 5514/udp) if you use the Connections / Keepalived logs.
+(default 5514/udp) if you use the Connections / Keepalived logs or health checks.
 
 ## Configuration
 
