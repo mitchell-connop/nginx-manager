@@ -18,6 +18,8 @@ Built for ConnopNetworking homelab infrastructure.
 - 🔐 **Certificates** — every cert nginx references, live, with SANs, issuer, expiry and which sites use it; upload new cert/key pairs
 - 📤 **Apply** — staged changes are pushed in one go; the agent writes them, runs `nginx -t`, reloads, and **rolls back automatically** if anything fails
 - 🔄 **Live, no scanning** — the Builder, Certificates and Raw Configs tabs are derived from what the agent reports, so hand edits on the server show up within seconds (agent file watcher)
+- 📈 **Usage dashboard** — requests by result (allowed / 4xx / 5xx / denied), data sent, median and p95 response time, top sites, clients, status codes, upstreams and RTSP streams, over 1 h – 30 days, per server or per group. Built from the streamed request log (enable it in Log → Connections); per-minute buckets for 48 h and hourly for 30 days in `data/usage/`
+- 🛡️ **CVE detection** — matches each server's nginx version against the [nginx.org security advisories](https://nginx.org/en/security_advisories.html) and nginx-agent against [OSV.dev](https://osv.dev). Module-specific advisories (HTTP/3, mp4, SSI, map regex…) are checked against the server's config, so a vulnerable version whose module isn't used is shown as such. Shows the version that fixes everything that applies; sources refresh daily (outbound HTTPS from the manager). OS packages aren't covered
 - 📊 **Status** — agent connection, nginx version and instance health
 - 🎨 **Branding** — your own logo (also the browser tab icon), app name and login text; stored in `data/` so updates keep it
 - 🖥️ **Live log** — Socket.IO real-time operation output (session-authenticated)

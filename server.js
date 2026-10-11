@@ -52,6 +52,8 @@ const fwdproxy = require('./lib/fwdproxy');
 const branding = require('./lib/branding');
 const logrx = require('./lib/logrx');
 const streams = require('./lib/streams');
+const { UsageStore } = require('./lib/usage');
+const { CveScanner } = require('./lib/cve');
 const dgram = require('dgram');
 
 // ---------------------------------------------------------------------------
@@ -117,6 +119,11 @@ const logReceiver = new logrx.LogReceiver({
   resolveAgent: agentIdByAddress,
   persistDir: path.join(store.DATA_DIR, 'logs'),
 });
+const usage = new UsageStore({ dir: path.join(store.DATA_DIR, 'usage') });
+logReceiver.on('entries', ({ agentId, kind, entries }) => {
+  if (kind === 'access') for (const e of entries) usage.record(agentId, e);
+});
+const cve = new CveScanner({ cacheFile: path.join(store.DATA_DIR, 'cve-cache.json') });
 
 // Multer — cert file uploads (PEM/CRT/KEY, max 1 MB each), kept in memory
 const certUpload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 1 * 1024 * 1024 } });
@@ -412,6 +419,7 @@ app.delete('/api/agents/:id', requireAuth, (req, res) => {
   if (remaining.length === agents.length) return res.status(404).json({ error: 'Not found' });
   store.writeAgents(remaining);
   store.removeAgentData(req.params.id);
+  usage.forget(req.params.id);
   const call = mp.streams.get(req.params.id);
   if (call) { try { call.end(); } catch {} mp.streams.delete(req.params.id); }
   io.emit('agents');
@@ -820,6 +828,52 @@ app.delete('/api/agents/:id/logs', requireAuth, (req, res) => {
   const agent = requireAgent(req, res); if (!agent) return;
   logReceiver.clear(agent.id, req.query.kind === 'keepalived' ? 'keepalived' : 'access');
   res.json({ ok: true });
+});
+
+// ---------------------------------------------------------------------------
+// Usage dashboard — aggregated from the streamed request log (lib/usage)
+// ---------------------------------------------------------------------------
+app.get('/api/agents/:id/usage', requireAuth, (req, res) => {
+  const agent = requireAgent(req, res); if (!agent) return;
+  const group = (agent.group || '').trim();
+  const members = req.query.scope === 'group' && group
+    ? store.readAgents().filter(a => (a.group || '').trim() === group) : [agent];
+  const st = id => store.desiredFiles(store.readState(id));
+  const logging = members.map(a => ({
+    id: a.id, name: a.name,
+    enabled: !!st(a.id)[logrx.remoteLogPaths(nginxDir(a)).conf],
+  }));
+  res.json({ scope: members.length > 1 || req.query.scope === 'group' ? 'group' : 'server', group: group || null,
+    servers: logging, ...usage.query(members.map(a => a.id), String(req.query.range || '24h')) });
+});
+
+// ---------------------------------------------------------------------------
+// CVE detection (lib/cve) — nginx.org advisories + OSV for nginx-agent
+// ---------------------------------------------------------------------------
+function agentConfigText(agentId) {
+  const st = store.readState(agentId);
+  const desired = store.desiredFiles(st);
+  return Object.keys(desired).filter(n => n.endsWith('.conf') && !desired[n].certificateMeta)
+    .map(n => readFileContent(st, n)).filter(t => typeof t === 'string').join('\n');
+}
+
+function cveReport() {
+  return {
+    sources: cve.sources(),
+    servers: store.readAgents().map(a => ({
+      ...cve.assess(a, agentConfigText(a.id)), group: (a.group || '').trim() || null, online: mp.isOnline(a.id),
+    })),
+  };
+}
+
+function refreshCves(force = false) {
+  return cve.refresh({ force, agentVersions: store.readAgents().map(a => a.agentVersion) });
+}
+
+app.get('/api/cve', requireAuth, (req, res) => res.json(cveReport()));
+app.post('/api/cve/refresh', requireAuth, async (req, res) => {
+  await refreshCves(true);
+  res.json(cveReport());
 });
 
 // ---------------------------------------------------------------------------
@@ -1416,6 +1470,7 @@ mp.on('agents', () => io.emit('agents'));
 mp.on('files', agentId => io.emit('files', { agentId }));
 vipMonitor.on('change', () => io.emit('groups'));
 logReceiver.on('entries', ({ agentId, kind, entries }) => io.emit('remotelog', { agentId, kind, entries }));
+cve.on('change', () => io.emit('cve'));
 certManager.on('change', id => io.emit('managedcerts', { id }));
 certManager.on('log', (id, line) => io.emit('certlog', { id, line }));
 vipMonitor.on('failover', ({ group, from, to, at }) => {
@@ -1464,6 +1519,11 @@ app.get('*', (req, res) => {
 
 vipMonitor.start();
 certManager.start();
+usage.start();
+// CVE sources: first check shortly after start (agents report versions on connect), then every 6 h
+setTimeout(() => refreshCves().catch(() => {}), 20e3).unref();
+setInterval(() => refreshCves().catch(() => {}), 6 * 3600e3).unref();
+for (const sig of ['SIGTERM', 'SIGINT']) process.once(sig, () => { usage.save(); process.exit(0); });
 if (LOG_PORT) {
   logReceiver.start()
     .then(p => console.log(`[nginx-manager] log receiver listening on udp/${p}`))

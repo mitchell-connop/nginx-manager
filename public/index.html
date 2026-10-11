@@ -217,6 +217,57 @@
     .rl-st.client_error { color: var(--text-dim); } .rl-st.server_error { color: var(--warn); }
     .ka-line { display: block; } .ka-line .ts { color: var(--text-dim); } .ka-line.master { color: var(--success); } .ka-line.warn { color: var(--warn); } .ka-line.backup { color: var(--accent2); }
 
+    /* ── USAGE ── */
+    .uv-filters { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-bottom: 16px; }
+    .seg { display: inline-flex; background: var(--surface2); border: 1px solid var(--border); border-radius: 8px; padding: 2px; }
+    .seg button { background: none; border: none; color: var(--text-dim); padding: 5px 11px; font-size: .8rem; border-radius: 6px; cursor: pointer; }
+    .seg button.active { background: var(--surface3); color: var(--text); font-weight: 600; }
+    .uv-tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 10px; margin-bottom: 16px; }
+    .uv-tile { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 12px 14px; min-width: 0; }
+    .uv-tile .l { font-size: .74rem; color: var(--text-dim); margin-bottom: 4px; }
+    .uv-tile .v { font-size: 1.35rem; font-weight: 600; color: var(--text); }
+    .uv-tile .s { font-size: .74rem; color: var(--text-dim); margin-top: 2px; }
+    .uv-tile.hero { grid-column: span 2; }
+    .uv-tile.hero .v { font-size: 2.6rem; line-height: 1.1; }
+    .uv-card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 14px 16px; margin-bottom: 14px; min-width: 0; }
+    .uv-card h4 { font-size: .86rem; font-weight: 600; color: var(--text); margin-bottom: 2px; }
+    .uv-card .sub { font-size: .74rem; color: var(--text-dim); margin-bottom: 8px; }
+    .uv-grid2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(340px, 1fr)); gap: 14px; }
+    .uv-legend { display: flex; gap: 14px; flex-wrap: wrap; font-size: .76rem; color: var(--text-dim); margin-bottom: 6px; }
+    .uv-legend i { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 5px; vertical-align: -1px; }
+    .uv-legend i.line { height: 2px; width: 14px; border-radius: 1px; vertical-align: 3px; }
+    .uv-chart { position: relative; width: 100%; }
+    .uv-chart svg { display: block; overflow: visible; }
+    .uv-tip { position: fixed; pointer-events: none; background: #0e1320; border: 1px solid var(--border); border-radius: 8px; padding: 8px 10px; font-size: .76rem; color: var(--text-dim); z-index: 500; display: none; min-width: 150px; box-shadow: 0 6px 18px rgba(0,0,0,.4); }
+    .uv-tip .h { color: var(--text-dim); margin-bottom: 4px; }
+    .uv-tip .r { display: flex; align-items: center; gap: 8px; justify-content: space-between; }
+    .uv-tip .r b { color: var(--text); font-weight: 600; font-variant-numeric: tabular-nums; }
+    .uv-tip .k { display: inline-block; width: 12px; height: 2px; margin-right: 6px; vertical-align: 3px; }
+    .uv-top { width: 100%; border-collapse: collapse; font-size: .78rem; }
+    .uv-top td { padding: 4px 0; vertical-align: middle; }
+    .uv-top td.key { font-family: var(--mono); color: var(--text); max-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; width: 55%; padding-right: 10px; }
+    .uv-top td.key small { display: block; font-family: var(--font); color: var(--text-dim); font-size: .7rem; }
+    .uv-top td.bar { width: 30%; }
+    .uv-top td.bar div { height: 8px; background: #3987e5; border-radius: 0 4px 4px 0; min-width: 2px; }
+    .uv-top td.num { text-align: right; color: var(--text); font-variant-numeric: tabular-nums; padding-left: 8px; white-space: nowrap; }
+    .uv-top td.num span { color: var(--text-dim); }
+    .uv-table { width: 100%; border-collapse: collapse; font-size: .76rem; font-variant-numeric: tabular-nums; }
+    .uv-table th, .uv-table td { padding: 4px 8px; text-align: right; border-bottom: 1px solid var(--border); }
+    .uv-table th:first-child, .uv-table td:first-child { text-align: left; }
+    .uv-table th { color: var(--text-dim); font-weight: 600; }
+
+    /* ── CVE ── */
+    .cve-sev { display: inline-flex; align-items: center; gap: 5px; font-size: .74rem; font-weight: 600; padding: 2px 8px; border-radius: 20px; white-space: nowrap; }
+    .cve-sev.major { color: #d03b3b; background: rgba(208,59,59,.12); border: 1px solid rgba(208,59,59,.35); }
+    .cve-sev.medium { color: #fab219; background: rgba(250,178,25,.10); border: 1px solid rgba(250,178,25,.3); }
+    .cve-sev.low, .cve-sev.minor, .cve-sev.none, .cve-sev.unknown { color: var(--text-dim); background: var(--surface2); border: 1px solid var(--border); }
+    table.cve-table { width: 100%; border-collapse: collapse; font-size: .8rem; }
+    .cve-table th { text-align: left; color: var(--text-dim); font-weight: 600; padding: 7px 10px; border-bottom: 1px solid var(--border); white-space: nowrap; }
+    .cve-table td { padding: 8px 10px; border-bottom: 1px solid var(--border); vertical-align: top; }
+    .cve-table tr.not_in_use td, .cve-table tr.info td { color: var(--text-dim); }
+    .cve-table a { color: var(--accent2); text-decoration: none; } .cve-table a:hover { text-decoration: underline; }
+    #cve-tab-badge .badge { padding: 0 6px; margin-left: 4px; font-size: .68rem; }
+
     /* ── STATUS ── */
     .status-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 14px; margin-bottom: 20px; }
     .stat-card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 18px; }
@@ -396,6 +447,8 @@
           <button class="tab-btn"         data-tab="certs">🔐 Certificates</button>
           <button class="tab-btn"         data-tab="configs">📄 Raw Configs</button>
           <button class="tab-btn"         data-tab="terminal">🖥️ Log</button>
+          <button class="tab-btn"         data-tab="usage">📈 Usage</button>
+          <button class="tab-btn"         data-tab="cve">🛡️ CVEs <span id="cve-tab-badge"></span></button>
           <button class="tab-btn"         data-tab="status">📊 Status</button>
         </div>
 
@@ -512,6 +565,24 @@
               <pre class="log-output" id="ka-output" style="max-height:520px"></pre>
             </div>
           </div>
+        </div>
+
+        <!-- ── USAGE TAB ── -->
+        <div class="tab-content" id="tab-usage">
+          <div class="uv-filters">
+            <div class="seg" id="uv-range">
+              <button data-r="1h">1 hour</button><button data-r="6h">6 hours</button><button data-r="24h" class="active">24 hours</button><button data-r="7d">7 days</button><button data-r="30d">30 days</button>
+            </div>
+            <div class="seg" id="uv-scope"><button data-s="server" class="active">This server</button><button data-s="group" id="uv-scope-group">Group</button></div>
+            <span id="uv-note" style="font-size:.78rem;color:var(--text-dim)"></span>
+          </div>
+          <div id="uv-body" style="transition:opacity .2s"></div>
+        </div>
+
+        <!-- ── CVE TAB ── -->
+        <div class="tab-content" id="tab-cve">
+          <div class="rl-setup" id="cve-sources"></div>
+          <div id="cve-body"></div>
         </div>
 
         <!-- ── STATUS TAB ── -->
@@ -1087,6 +1158,8 @@
   </div>
 </div>
 
+<div class="uv-tip" id="uv-tip" role="tooltip"></div>
+
 <!-- ══════════════════════ SCRIPT ══════════════════════ -->
 <script>
 // ─── STATE ───────────────────────────────────────────
@@ -1136,6 +1209,7 @@ function initSocket() {
   });
   S.socket.on('agents', debounce(loadAgents, 300));
   S.socket.on('remotelog', onRemoteLog);
+  S.socket.on('cve', debounce(() => loadCves(), 500));
   S.socket.on('branding', loadBranding);
   S.socket.on('groups', debounce(async () => { await loadGroups(); renderAgentList(); }, 300));
   S.socket.on('managedcerts', debounce(() => { if (S.currentAgentId) loadCerts(); }, 300));
@@ -1362,7 +1436,9 @@ async function selectAgent(id) {
   document.getElementById('editor-section').style.display = 'none';
   clearLog();
   resetRemoteLogs();
+  S.uv.data = null; S.uv.scope = 'server';
   switchTab('builder');
+  loadCves();
   await Promise.all([loadSites(), loadCerts(), loadConfigs(), loadForwardProxies(), loadStreams()]);
 }
 
@@ -2818,6 +2894,8 @@ function switchTab(name) {
   document.querySelectorAll('.tab-btn').forEach(b => b.classList.toggle('active', b.dataset.tab === name));
   document.querySelectorAll('.tab-content').forEach(t => t.classList.toggle('active', t.id === 'tab-' + name));
   if (name === 'terminal' && S.logPane !== 'ops') loadRemoteLogs();
+  if (name === 'usage') loadUsage();
+  if (name === 'cve') loadCves();
 }
 
 // ─── LOG ──────────────────────────────────────────────
@@ -2991,6 +3069,320 @@ function renderKeepalived() {
   if (atBottom) el.scrollTop = el.scrollHeight;
 }
 
+
+// ─── USAGE DASHBOARD ──────────────────────────────────
+// Colours validated (dataviz validator) against the card surface #1a1d27. Result stack order
+// allowed → other 4xx → 5xx → denied keeps the warning/serious pair apart (normal-vision ΔE ≥ 15).
+const UV_RESULTS = [
+  { k: 'allowed', label: 'Allowed', color: '#0ca30c' },
+  { k: 'client_error', label: 'Other 4xx', color: '#fab219' },
+  { k: 'server_error', label: '5xx errors', color: '#d03b3b' },
+  { k: 'denied', label: 'Denied', color: '#ec835a' },
+];
+const UV_BLUE = '#3987e5', UV_ORANGE = '#d95926', UV_GRID = '#2a2f40', UV_AXIS = '#3a4058', UV_MUTED = '#8b90a8', UV_SURFACE = '#1a1d27';
+S.uv = { range: '24h', scope: 'server', data: null, timer: null };
+
+document.addEventListener('click', e => {
+  const r = e.target.closest('#uv-range button'); if (r) { S.uv.range = r.dataset.r; loadUsage(); }
+  const sc = e.target.closest('#uv-scope button'); if (sc && !sc.disabled) { S.uv.scope = sc.dataset.s; loadUsage(); }
+});
+window.addEventListener('resize', debounce(() => { if (document.getElementById('tab-usage').classList.contains('active') && S.uv.data) renderUsage(); }, 200));
+
+async function loadUsage() {
+  const id = S.currentAgentId; if (!id) return;
+  const a = currentAgent();
+  document.querySelectorAll('#uv-range button').forEach(b => b.classList.toggle('active', b.dataset.r === S.uv.range));
+  const gb = document.getElementById('uv-scope-group');
+  gb.disabled = !a?.group; gb.textContent = a?.group ? `Group: ${a.group}` : 'No group';
+  if (!a?.group) S.uv.scope = 'server';
+  document.querySelectorAll('#uv-scope button').forEach(b => b.classList.toggle('active', b.dataset.s === S.uv.scope));
+  const body = document.getElementById('uv-body');
+  body.style.opacity = S.uv.data ? '.5' : '1';        // refetch keeps the frame
+  const d = await apiFetch(`/api/agents/${id}/usage?range=${S.uv.range}&scope=${S.uv.scope}`);
+  body.style.opacity = '1';
+  if (!d || d.error || id !== S.currentAgentId) return;
+  S.uv.data = d;
+  renderUsage();
+  clearTimeout(S.uv.timer);
+  S.uv.timer = setTimeout(() => { if (document.getElementById('tab-usage').classList.contains('active')) loadUsage(); }, 60e3);
+}
+
+const fmtN = n => n == null ? '—' : n >= 1e6 ? (n / 1e6).toFixed(n >= 1e7 ? 0 : 1) + 'M' : n >= 1e4 ? (n / 1e3).toFixed(n >= 1e5 ? 0 : 1) + 'K' : Math.round(n).toLocaleString();
+const fmtMs = s => s == null ? '—' : s < 1 ? `${Math.round(s * 1000)} ms` : `${s.toFixed(2)} s`;
+const fmtPct = (a, b) => b ? `${(100 * a / b).toFixed(1)}%` : '—';
+function fmtTime(t, step) {
+  const d = new Date(t);
+  if (step >= 3600e3) return d.toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+  return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+}
+function niceNum(v) {
+  const p = Math.pow(10, Math.floor(Math.log10(v))), f = v / p;
+  return (f <= 1 ? 1 : f <= 2 ? 2 : f <= 2.5 ? 2.5 : f <= 5 ? 5 : 10) * p;
+}
+// clean axis: ~4 intervals of a 1/2/2.5/5 step; bytes step in KB/MB/GB units so ticks read 50 MB, 100 MB…
+function niceTicks(max, bytes) {
+  if (!max || max <= 0) max = 1;
+  const unit = bytes ? Math.pow(1024, Math.max(0, Math.floor(Math.log(max) / Math.log(1024)))) : 1;
+  const step = niceNum(max / unit / 4) * unit;
+  const top = Math.ceil(max / step) * step;
+  const ticks = []; for (let v = 0; v <= top + step / 2; v += step) ticks.push(v);
+  return { top, ticks };
+}
+
+function renderUsage() {
+  const d = S.uv.data, body = document.getElementById('uv-body');
+  const t = d.totals;
+  const off = d.servers.filter(x => !x.enabled);
+  document.getElementById('uv-note').textContent = d.scope === 'group' ? `${d.servers.length} servers combined` : '';
+  const warn = off.length ? `<div class="rl-setup"><span class="grow">⚪ Request logging is off on ${off.map(x => `<strong>${esc(x.name)}</strong>`).join(', ')} — usage is built from the streamed request log.
+    Enable it in <strong>Log → Connections</strong>${off.length < d.servers.length ? ' (the other servers are counted)' : ''}.</span></div>` : '';
+  if (!t.n) {
+    body.innerHTML = warn + `<div class="empty-state"><div class="icon">📈</div><p style="font-size:.85rem">No requests recorded in this period yet.</p></div>`;
+    return;
+  }
+  const tile = (l, v, sub, hero) => `<div class="uv-tile${hero ? ' hero' : ''}"><div class="l">${l}</div><div class="v">${v}</div>${sub ? `<div class="s">${sub}</div>` : ''}</div>`;
+  body.innerHTML = warn + `
+    <div class="uv-tiles">
+      ${tile('Requests', fmtN(t.n), `since ${fmtTime(Math.max(d.start, d.firstData || d.start), d.step)}`, true)}
+      ${tile('Allowed', fmtPct(t.allowed, t.n), `${fmtN(t.allowed)} requests`)}
+      ${tile('Denied', fmtN(t.denied), `${fmtPct(t.denied, t.n)} · 401/403/407/429/444`)}
+      ${tile('5xx errors', fmtN(t.server_error), fmtPct(t.server_error, t.n))}
+      ${tile('Data sent', formatBytes(t.bytes), t.streams ? `incl. ${formatBytes(t.streamBytes)} RTSP` : '')}
+      ${tile('Latency', fmtMs(t.p50), `median · p95 ${fmtMs(t.p95)}`)}
+      ${t.streams ? tile('RTSP sessions', fmtN(t.streams), '') : ''}
+    </div>
+    <div class="uv-card"><h4>Requests</h4><div class="sub">per ${fmtStep(d.step)}, by result</div>
+      <div class="uv-legend">${UV_RESULTS.map(r => `<span><i style="background:${r.color}"></i>${r.label}</span>`).join('')}</div>
+      <div class="uv-chart" id="uv-req"></div>
+      <details style="margin-top:8px"><summary style="cursor:pointer;font-size:.76rem;color:var(--text-dim)">Show as table</summary><div id="uv-req-table" style="max-height:260px;overflow:auto;margin-top:6px"></div></details>
+    </div>
+    <div class="uv-grid2">
+      <div class="uv-card"><h4>Data sent</h4><div class="sub">bytes per ${fmtStep(d.step)}${t.streams ? ' · RTSP sessions count when they end' : ''}</div><div class="uv-chart" id="uv-bw"></div></div>
+      <div class="uv-card"><h4>Response time</h4><div class="sub">HTTP requests, per ${fmtStep(d.step)}</div>
+        <div class="uv-legend"><span><i class="line" style="background:${UV_BLUE}"></i>Median</span><span><i class="line" style="background:${UV_ORANGE}"></i>95th percentile</span></div>
+        <div class="uv-chart" id="uv-lat"></div></div>
+    </div>
+    <div class="uv-grid2">
+      <div class="uv-card"><h4>Top sites</h4><div class="sub">requests</div><div id="uv-hosts"></div></div>
+      <div class="uv-card"><h4>Top clients</h4><div class="sub">requests</div><div id="uv-clients"></div></div>
+      <div class="uv-card"><h4>Status codes</h4><div class="sub">requests</div><div id="uv-status"></div></div>
+      <div class="uv-card"><h4>Upstreams</h4><div class="sub">requests (5xx errors)</div><div id="uv-ups"></div></div>
+      ${d.top.streams.length ? `<div class="uv-card"><h4>RTSP streams</h4><div class="sub">sessions · data</div><div id="uv-streams"></div></div>` : ''}
+    </div>`;
+
+  chartStacked(document.getElementById('uv-req'), d);
+  chartLines(document.getElementById('uv-bw'), d, [{ k: 'bytes', label: 'Data sent', color: UV_BLUE, area: true }], formatBytes);
+  chartLines(document.getElementById('uv-lat'), d, [{ k: 'p50', label: 'Median', color: UV_BLUE }, { k: 'p95', label: '95th percentile', color: UV_ORANGE }], fmtMs);
+  topList('uv-hosts', d.top.hosts, e => e.denied || e.err ? `${e.denied ? `${fmtN(e.denied)} denied` : ''}${e.denied && e.err ? ', ' : ''}${e.err ? `${fmtN(e.err)} 5xx` : ''}` : '');
+  topList('uv-clients', d.top.clients, e => e.denied ? `${fmtN(e.denied)} denied` : '');
+  topList('uv-status', d.top.status, () => '');
+  topList('uv-ups', d.top.upstreams, e => e.err ? `${fmtN(e.err)} 5xx` : '');
+  if (d.top.streams.length) topList('uv-streams', d.top.streams.map(s => ({ ...s, key: rsLabelForPort(s.key) })), e => formatBytes(e.bytes));
+
+  const rows = d.series.filter(x => x.n).reverse();
+  document.getElementById('uv-req-table').innerHTML = `<table class="uv-table"><thead><tr><th>Time</th><th>Requests</th>${UV_RESULTS.map(r => `<th>${r.label}</th>`).join('')}<th>Data</th><th>Median</th><th>p95</th></tr></thead><tbody>${
+    rows.map(x => `<tr><td>${esc(fmtTime(x.t, d.step))}</td><td>${x.n.toLocaleString()}</td>${UV_RESULTS.map(r => `<td>${x[r.k].toLocaleString()}</td>`).join('')}<td>${formatBytes(x.bytes)}</td><td>${fmtMs(x.p50)}</td><td>${fmtMs(x.p95)}</td></tr>`).join('')}</tbody></table>`;
+}
+function fmtStep(ms) { return ms >= 3600e3 ? `${ms / 3600e3} hour${ms > 3600e3 ? 's' : ''}` : `${ms / 60e3} minute${ms > 60e3 ? 's' : ''}`; }
+
+function topList(id, list, extra) {
+  const el = document.getElementById(id); if (!el) return;
+  if (!list.length) { el.innerHTML = '<div style="font-size:.78rem;color:var(--text-dim)">Nothing yet.</div>'; return; }
+  const max = Math.max(...list.map(e => e.n));
+  el.innerHTML = `<table class="uv-top">${list.map(e => {
+    const x = extra(e);
+    return `<tr><td class="key" title="${esc(e.key)}">${esc(e.key)}${x ? `<small>${esc(x)}</small>` : ''}</td><td class="bar"><div style="width:${Math.max(1, 100 * e.n / max)}%"></div></td>
+      <td class="num">${fmtN(e.n)}</td></tr>`;
+  }).join('')}</table>`;
+}
+
+// shared chart frame: x scale over the series slots, y axis ticks, x labels
+function uvFrame(el, d, maxV, fmtY, bytes) {
+  const W = Math.max(280, el.clientWidth), H = 190, L = 56, R = 12, T = 8, B = 24;
+  const n = d.series.length, pw = W - L - R, ph = H - T - B;
+  const slot = pw / n;
+  const { top: yMax, ticks } = niceTicks(maxV, bytes);
+  const y = v => T + ph - (v / yMax) * ph;
+  const every = Math.max(1, Math.ceil(n / Math.max(2, Math.floor(pw / 90))));
+  let svg = `<svg width="${W}" height="${H}" role="img">`;
+  for (const v of ticks) {
+    svg += `<line x1="${L}" x2="${W - R}" y1="${y(v)}" y2="${y(v)}" stroke="${v ? UV_GRID : UV_AXIS}" stroke-width="1" shape-rendering="crispEdges"/>`;
+    svg += `<text x="${L - 8}" y="${y(v) + 4}" text-anchor="end" font-size="10.5" fill="${UV_MUTED}" style="font-variant-numeric:tabular-nums">${esc(fmtY(v))}</text>`;
+  }
+  d.series.forEach((p, i) => {
+    if (i % every) return;
+    svg += `<text x="${L + slot * (i + .5)}" y="${H - 6}" text-anchor="middle" font-size="10.5" fill="${UV_MUTED}">${esc(fmtTime(p.t, d.step))}</text>`;
+  });
+  return { W, H, L, R, T, B, pw, ph, slot, y, svg, cx: i => L + slot * (i + .5) };
+}
+
+function roundedTop(x, y, w, h, r) {
+  r = Math.min(r, w / 2, h);
+  return `M${x},${y + h}V${y + r}Q${x},${y} ${x + r},${y}H${x + w - r}Q${x + w},${y} ${x + w},${y + r}V${y + h}Z`;
+}
+
+function chartStacked(el, d) {
+  const maxV = Math.max(1, ...d.series.map(p => p.n));
+  const f = uvFrame(el, d, maxV, fmtN);
+  const bw = Math.max(1, Math.min(24, f.slot - 2));
+  let marks = '';
+  d.series.forEach((p, i) => {
+    if (!p.n) return;
+    const x = f.cx(i) - bw / 2;
+    let base = f.y(0);
+    const segs = UV_RESULTS.filter(r => p[r.k] > 0);
+    segs.forEach((r, j) => {
+      const h = f.y(0) - f.y(p[r.k]);
+      const top = j === segs.length - 1;
+      const gap = j > 0 && h > 3 ? 2 : 0;        // 2px surface gap between stacked segments
+      const hh = Math.max(top ? 1 : 0, h - gap);
+      const yy = base - h;
+      marks += top ? `<path d="${roundedTop(x, yy, bw, hh, 4)}" fill="${r.color}"/>` : `<rect x="${x}" y="${yy}" width="${bw}" height="${hh}" fill="${r.color}"/>`;
+      base -= h;
+    });
+  });
+  let hits = '';
+  d.series.forEach((p, i) => { hits += `<rect class="uv-hit" data-i="${i}" x="${f.L + f.slot * i}" y="${f.T}" width="${f.slot}" height="${f.ph}" fill="transparent"/>`; });
+  el.innerHTML = f.svg + marks + `<rect id="${el.id}-hl" x="0" y="${f.T}" width="0" height="${f.ph}" fill="rgba(255,255,255,.05)" pointer-events="none"/>` + hits + '</svg>';
+  bindTip(el, i => {
+    const p = d.series[i];
+    const hl = document.getElementById(`${el.id}-hl`); hl.setAttribute('x', f.L + f.slot * i); hl.setAttribute('width', f.slot);
+    return [fmtTime(p.t, d.step), [['Total', fmtN(p.n), null], ...UV_RESULTS.slice().reverse().map(r => [r.label, fmtN(p[r.k]), r.color])]];
+  }, () => { const hl = document.getElementById(`${el.id}-hl`); if (hl) hl.setAttribute('width', 0); });
+}
+
+function chartLines(el, d, defs, fmtY) {
+  const maxV = Math.max(0, ...defs.flatMap(s => d.series.map(p => p[s.k] || 0)));
+  const f = uvFrame(el, d, maxV || 1, fmtY, fmtY === formatBytes);
+  let marks = '';
+  for (const s of defs) {
+    // break the line where there is no data (null) rather than drawing to zero
+    const segs = []; let cur = [];
+    d.series.forEach((p, i) => {
+      const v = p[s.k];
+      if (v == null || (s.k !== 'bytes' && !p.n)) { if (cur.length) segs.push(cur); cur = []; return; }
+      cur.push([f.cx(i), f.y(v)]);
+    });
+    if (cur.length) segs.push(cur);
+    for (const seg of segs) {
+      const line = seg.map((pt, j) => `${j ? 'L' : 'M'}${pt[0].toFixed(1)},${pt[1].toFixed(1)}`).join('');
+      if (s.area && seg.length > 1) marks += `<path d="${line}L${seg[seg.length - 1][0]},${f.y(0)}L${seg[0][0]},${f.y(0)}Z" fill="${s.color}" opacity=".1"/>`;
+      marks += seg.length > 1 ? `<path d="${line}" fill="none" stroke="${s.color}" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>`
+        : `<circle cx="${seg[0][0]}" cy="${seg[0][1]}" r="4" fill="${s.color}" stroke="${UV_SURFACE}" stroke-width="2"/>`;
+    }
+  }
+  const hits = d.series.map((p, i) => `<rect class="uv-hit" data-i="${i}" x="${f.L + f.slot * i}" y="${f.T}" width="${f.slot}" height="${f.ph}" fill="transparent"/>`).join('');
+  el.innerHTML = f.svg + marks +
+    `<line id="${el.id}-x" x1="0" x2="0" y1="${f.T}" y2="${f.T + f.ph}" stroke="${UV_MUTED}" stroke-width="1" visibility="hidden" pointer-events="none"/>` +
+    defs.map((s, j) => `<circle id="${el.id}-d${j}" r="4" fill="${s.color}" stroke="${UV_SURFACE}" stroke-width="2" visibility="hidden" pointer-events="none"/>`).join('') + hits + '</svg>';
+  bindTip(el, i => {
+    const p = d.series[i], x = f.cx(i);
+    const xl = document.getElementById(`${el.id}-x`); xl.setAttribute('x1', x); xl.setAttribute('x2', x); xl.setAttribute('visibility', 'visible');
+    defs.forEach((s, j) => {
+      const dot = document.getElementById(`${el.id}-d${j}`), v = p[s.k];
+      if (v == null) { dot.setAttribute('visibility', 'hidden'); return; }
+      dot.setAttribute('cx', x); dot.setAttribute('cy', f.y(v)); dot.setAttribute('visibility', 'visible');
+    });
+    return [fmtTime(p.t, d.step), defs.map(s => [s.label, p[s.k] == null ? '—' : fmtY(p[s.k]), s.color])];
+  }, () => {
+    document.getElementById(`${el.id}-x`)?.setAttribute('visibility', 'hidden');
+    defs.forEach((s, j) => document.getElementById(`${el.id}-d${j}`)?.setAttribute('visibility', 'hidden'));
+  });
+}
+
+// One tooltip; rows built with textContent (labels can come from logs)
+function bindTip(el, fill, clear) {
+  const tip = document.getElementById('uv-tip');
+  const show = (ev, i) => {
+    const [head, rows] = fill(i);
+    tip.replaceChildren();
+    const h = document.createElement('div'); h.className = 'h'; h.textContent = head; tip.appendChild(h);
+    for (const [label, value, color] of rows) {
+      const r = document.createElement('div'); r.className = 'r';
+      const l = document.createElement('span');
+      if (color) { const k = document.createElement('i'); k.className = 'k'; k.style.background = color; l.appendChild(k); }
+      l.appendChild(document.createTextNode(label));
+      const v = document.createElement('b'); v.textContent = value;
+      r.append(l, v); tip.appendChild(r);
+    }
+    tip.style.display = 'block';
+    const x = Math.min(ev.clientX + 14, window.innerWidth - tip.offsetWidth - 8);
+    const y = Math.max(8, ev.clientY - tip.offsetHeight - 10);
+    tip.style.left = x + 'px'; tip.style.top = y + 'px';
+  };
+  el.querySelectorAll('.uv-hit').forEach(r => {
+    r.addEventListener('pointermove', ev => show(ev, +r.dataset.i));
+    r.addEventListener('pointerleave', () => { tip.style.display = 'none'; clear(); });
+  });
+}
+
+// ─── CVE DETECTION ────────────────────────────────────
+S.cve = null;
+async function loadCves(force) {
+  const d = force ? await apiFetch('/api/cve/refresh', { method: 'POST' }) : await apiFetch('/api/cve');
+  if (!d || d.error) { if (force) toast('CVE check failed', 'error'); return; }
+  S.cve = d;
+  renderCves();
+}
+
+function cveAgo(iso) { return iso ? rlAgo(iso) : 'never'; }
+
+function renderCves() {
+  const d = S.cve; if (!d) return;
+  const me = d.servers.find(x => x.id === S.currentAgentId);
+  const affected = me ? [...(me.nginx?.findings || []), ...(me.agent?.findings || [])].filter(f => f.status === 'affected') : [];
+  document.getElementById('cve-tab-badge').innerHTML = !me ? '' : affected.length
+    ? `<span class="badge badge-danger">${affected.length}</span>` : (me.nginx ? '<span class="badge badge-success">✓</span>' : '');
+
+  const src = d.sources;
+  document.getElementById('cve-sources').innerHTML = `<span class="grow">
+      Sources: <a href="${esc(src.nginx.url)}" target="_blank" rel="noopener noreferrer" style="color:var(--accent2)">nginx.org security advisories</a>
+      (${src.nginx.count} advisories, checked ${esc(cveAgo(src.nginx.at))})${src.nginx.error ? ` <strong style="color:var(--warn)">⚠ ${esc(src.nginx.error)}</strong>` : ''}
+      · <a href="https://osv.dev" target="_blank" rel="noopener noreferrer" style="color:var(--accent2)">OSV.dev</a> for nginx-agent (checked ${esc(cveAgo(src.osv.at))})${src.osv.error ? ` <strong style="color:var(--warn)">⚠ ${esc(src.osv.error)}</strong>` : ''}.
+      Refreshed daily. OS packages (OpenSSL, keepalived…) aren't covered — the agent doesn't report them.</span>
+    <button class="btn-secondary btn-sm" id="cve-refresh">🔄 Check now</button>`;
+  document.getElementById('cve-refresh').onclick = async e => { e.target.disabled = true; e.target.textContent = 'Checking…'; await loadCves(true); };
+
+  const body = document.getElementById('cve-body');
+  if (!me) { body.innerHTML = ''; return; }
+  const n = me.nginx;
+  const sev = s => `<span class="cve-sev ${esc(s)}">${s === 'major' ? '⛔' : s === 'medium' ? '⚠' : 'ℹ'} ${esc(s)}</span>`;
+  const statusText = f => f.status === 'affected' ? '<strong style="color:var(--text)">Affected</strong>'
+    : f.status === 'info' ? 'Informational'
+    : `Vulnerable version, but ${esc(f.feature)} isn't used in this server's config`;
+  const ids = f => (f.cves.length ? f.cves : [f.id]).map(c => /^CVE-/.test(c)
+    ? `<a href="https://www.cve.org/CVERecord?id=${esc(c)}" target="_blank" rel="noopener noreferrer">${esc(c)}</a>` : esc(c)).join('<br>');
+  const table = list => `<table class="cve-table"><thead><tr><th>Severity</th><th>CVE</th><th>Issue</th><th>Status</th><th>Fixed in</th></tr></thead><tbody>${
+    list.map(f => `<tr class="${f.status}"><td>${sev(f.severity)}</td><td style="white-space:nowrap">${ids(f)}</td>
+      <td>${esc(f.title)}${f.advisory ? ` · <a href="${esc(f.advisory)}" target="_blank" rel="noopener noreferrer">advisory</a>` : ''}</td>
+      <td>${statusText(f)}</td><td class="mono">${esc(f.fixedIn || '—')}</td></tr>`).join('')}</tbody></table>`;
+
+  let html = '';
+  const nAff = n ? n.findings.filter(f => f.status === 'affected') : [];
+  const nOther = n ? n.findings.filter(f => f.status !== 'affected') : [];
+  html += `<div class="uv-tiles" style="grid-template-columns:repeat(auto-fit,minmax(170px,1fr))">
+    <div class="uv-tile"><div class="l">nginx</div><div class="v">${esc(n?.version || currentAgent()?.nginxVersion || '—')}</div>
+      <div class="s">${!n ? (src.nginx.at ? 'version not reported yet' : 'advisories not downloaded yet') : nAff.length ? `<span style="color:#d03b3b">⛔ ${nAff.length} affecting this server</span>` : '✓ no known vulnerabilities apply'}</div></div>
+    <div class="uv-tile"><div class="l">Recommended</div><div class="v" style="font-size:1.1rem">${n?.upgradeTo ? `nginx ≥ ${esc(n.upgradeTo)}` : n?.upgradeToAll ? `nginx ≥ ${esc(n.upgradeToAll)}` : n ? 'Up to date' : '—'}</div>
+      <div class="s">${n?.upgradeTo ? 'fixes every advisory affecting this server' : n?.upgradeToAll ? 'optional — patches modules this server doesn\'t use' : ''}</div></div>
+    <div class="uv-tile"><div class="l">nginx-agent</div><div class="v">${esc(me.agent?.version || currentAgent()?.agentVersion || '—')}</div>
+      <div class="s">${me.agent ? (me.agent.findings.length ? `<span style="color:#d03b3b">⛔ ${me.agent.findings.length} known</span>` : '✓ no known vulnerabilities (OSV)') : 'not checked yet'}</div></div>
+  </div>`;
+  html += `<div class="uv-card"><h4>nginx ${esc(n?.version || '')}</h4><div class="sub">Advisories whose vulnerable range includes this version. Module-specific ones are checked against this server's config.</div>
+    ${!n ? '<div style="font-size:.8rem;color:var(--text-dim)">Waiting for the advisory list or the agent to report its nginx version.</div>'
+      : n.findings.length ? table([...nAff, ...nOther]) : '<div style="font-size:.85rem;color:var(--success)">✓ None of the nginx.org advisories apply to this version.</div>'}</div>`;
+  if (me.agent) html += `<div class="uv-card"><h4>nginx-agent ${esc(me.agent.version)}</h4><div class="sub">OSV.dev, Go module github.com/nginx/agent/v3</div>
+    ${me.agent.findings.length ? table(me.agent.findings) : '<div style="font-size:.85rem;color:var(--success)">✓ No known vulnerabilities.</div>'}</div>`;
+  const others = d.servers.filter(x => x.id !== me.id);
+  if (others.length) html += `<div class="uv-card"><h4>Other servers</h4><table class="cve-table"><tbody>${others.map(o => {
+      const c = [...(o.nginx?.findings || []), ...(o.agent?.findings || [])].filter(f => f.status === 'affected').length;
+      return `<tr><td><a href="#" onclick="selectAgent('${esc(o.id)}').then(()=>switchTab('cve'));return false">${esc(o.name)}</a></td>
+        <td class="mono">nginx ${esc(o.nginx?.version || '—')} · agent ${esc(o.agent?.version || '—')}</td>
+        <td>${c ? `<span style="color:#d03b3b">⛔ ${c} affecting</span>` : o.nginx ? '✓ none' : '—'}</td></tr>`;
+    }).join('')}</tbody></table></div>`;
+  body.innerHTML = html;
+}
+
 // ─── TOAST ────────────────────────────────────────────
 function toast(msg, type = 'info') {
   const el = document.createElement('div');
@@ -3007,7 +3399,7 @@ function formatBytes(b) {
   if (b < 1024) return b + ' B';
   const u = ['KB', 'MB', 'GB', 'TB']; let i = -1;
   do { b /= 1024; i++; } while (b >= 1024 && i < u.length - 1);
-  return b.toFixed(1) + ' ' + u[i];
+  return (b >= 100 || Number.isInteger(+b.toFixed(1)) ? b.toFixed(0) : b.toFixed(1)) + ' ' + u[i];
 }
 function debounce(fn, ms) { let t; return (...args) => { clearTimeout(t); t = setTimeout(() => fn(...args), ms); }; }
 function formatDate(iso) { return new Date(iso).toLocaleString(); }
