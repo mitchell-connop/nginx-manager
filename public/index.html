@@ -3428,6 +3428,8 @@ function renderSignin(a) {
         <div class="toggle-group"><label for="au-l-stls">StartTLS (for ldap://)</label><label class="toggle"><input type="checkbox" id="au-l-stls" ${L.starttls ? 'checked' : ''}><span class="toggle-slider"></span></label></div>
         <div class="toggle-group"><label for="au-l-verify">Verify the server certificate</label><label class="toggle"><input type="checkbox" id="au-l-verify" ${L.verifyTls ? 'checked' : ''}><span class="toggle-slider"></span></label></div>
         <div class="form-group"><label>Directory type</label><select id="au-l-preset" onchange="authPreset(this.value)"><option value="">—</option><option value="ad">Active Directory</option><option value="openldap">OpenLDAP / FreeIPA</option></select></div></div>
+      <div class="form-group"><label>Certificate name (optional)</label><input type="text" id="au-l-sni" value="${esc(L.tlsServerName || '')}" placeholder="dc01.example.com — when the URL uses an IP address">
+        <div class="form-hint">The name the directory's certificate is issued to. Lets you connect by IP and still verify the certificate.</div></div>
       <div class="form-group"><label>CA certificate (PEM, optional — for an internal CA)</label><textarea id="au-l-ca" rows="2" style="font-family:var(--mono);font-size:.74rem" placeholder="-----BEGIN CERTIFICATE-----">${esc(L.caPem)}</textarea></div>
       <div class="form-group"><label>How users are found</label><select id="au-l-mode" onchange="authModeUi()">
         <option value="search" ${L.mode === 'search' ? 'selected' : ''}>Service account searches for the user, then their password is checked</option>
@@ -3487,7 +3489,7 @@ function authBody() {
   const v = id => document.getElementById(id).value, c = id => document.getElementById(id).checked;
   return {
     order: v('au-order').split(','),
-    ldap: { enabled: c('au-l-on'), url: v('au-l-url').trim(), starttls: c('au-l-stls'), verifyTls: c('au-l-verify'), caPem: v('au-l-ca').trim(),
+    ldap: { enabled: c('au-l-on'), url: v('au-l-url').trim(), starttls: c('au-l-stls'), verifyTls: c('au-l-verify'), caPem: v('au-l-ca').trim(), tlsServerName: v('au-l-sni').trim(),
       mode: v('au-l-mode'), bindDn: v('au-l-binddn').trim(), bindPassword: v('au-l-bindpw'), baseDn: v('au-l-base').trim(),
       userFilter: v('au-l-filter').trim(), userTemplate: v('au-l-tpl').trim(), nested: c('au-l-nested'),
       groups: { admin: v('au-l-g-admin'), operator: v('au-l-g-operator'), viewer: v('au-l-g-viewer') }, defaultRole: v('au-l-def') },

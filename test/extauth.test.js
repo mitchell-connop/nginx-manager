@@ -109,3 +109,11 @@ test('settings: validation and secrets masked', () => {
   assert.strictEqual(a.settings.ldap.bindPassword, 'pw');
   assert.throws(() => a.update({ radius: { enabled: true, host: 'r', secret: '' } }), /secret/);
 });
+
+test('service-account bind failure is reported as such, not as a bad user password', async () => {
+  class C { async bind() { throw Object.assign(new Error('data 52e'), { code: 49 }); } async unbind() {} }
+  const a = new ea.ExternalAuth({ ldapClient: C });
+  a.settings.ldap = { ...a.settings.ldap, enabled: true, url: 'ldaps://dc', mode: 'search', bindDn: 'svc', bindPassword: 'x', baseDn: 'DC=x', defaultRole: 'viewer', tlsServerName: 'dc01.example.com' };
+  const r = await a.authenticate('al', 'pw');
+  assert.match(r.reason, /^service account bind failed/);
+});
