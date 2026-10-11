@@ -13,6 +13,7 @@ Built for ConnopNetworking homelab infrastructure.
 - 🔀 **Reverse proxies** — add and edit sites from a popup; they live in `conf.d/reverse-proxies.conf` (created if missing), edited in place with a live diff preview
 - 🏗️ **Visual Site Builder** — every server block on the server is listed live; static sites and redirects get their own generated file
 - 🧭 **Forward proxies** — HTTPS (CONNECT) forward proxies with client allowlists, logins and destination allowlists, in `conf.d/forward-proxies.conf` — **requires nginx 1.31.0+** on that server
+- 📹 **RTSP streams** — relay camera RTSP feeds as TCP proxies in nginx's `stream {}` context: one upstream + server per camera (optional fallback such as an NVR, client allowlist required, connect/idle timeouts, TCP keepalive) in `stream.d/rtsp-streams.conf`. The first stream adds a `stream {}` block to `nginx.conf` (with a local `stream-access.log`); sessions also appear in the Log tab's Connections view. Clients must use RTSP over TCP
 - 🔄 **Managed certificates** — certbot runs on the manager (Let's Encrypt by default; ZeroSSL, Google Trust Services, DigiCert, Sectigo or any ACME CA with EAB; or exportable AWS ACM certificates), deploys to every server in the group through the agents, and renews automatically
 - 🔐 **Certificates** — every cert nginx references, live, with SANs, issuer, expiry and which sites use it; upload new cert/key pairs
 - 📤 **Apply** — staged changes are pushed in one go; the agent writes them, runs `nginx -t`, reloads, and **rolls back automatically** if anything fails

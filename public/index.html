@@ -415,6 +415,12 @@
             <button class="btn-primary btn-sm" id="fp-add" onclick="openFwdModal()">＋ Add Forward Proxy</button>
           </div>
           <div class="sites-grid" id="fp-grid"></div>
+
+          <div class="section-header" style="margin-top:26px">
+            <span class="section-title">RTSP streams</span>
+            <button class="btn-primary btn-sm" onclick="openStreamModal()">＋ Add RTSP Stream</button>
+          </div>
+          <div class="sites-grid" id="rs-grid"></div>
         </div>
 
         <!-- ── CERTIFICATES TAB ── -->
@@ -493,7 +499,7 @@
                 <tbody id="rl-rows"></tbody>
               </table>
             </div>
-            <div class="form-hint" style="margin-top:6px">Newest first. Query strings are not logged. Shows the last 2,000 requests received since the manager started.</div>
+            <div class="form-hint" style="margin-top:6px">Newest first. Query strings are not logged. Stream (RTSP) sessions appear when they end, with their duration. Shows the last 2,000 entries received since the manager started.</div>
           </div>
 
           <div class="log-pane" id="logpane-keepalived">
@@ -742,6 +748,47 @@
       <button class="btn-secondary" onclick="document.getElementById('fp-modal').classList.remove('open')">Cancel</button>
       <button class="btn-primary" onclick="fpSave(false)">💾 Save</button>
       <button class="btn-success" onclick="fpSave(true)">📤 Save &amp; Apply</button>
+    </div>
+  </div>
+</div>
+
+<!-- ─── RTSP STREAM MODAL ─── -->
+<div class="modal-backdrop" id="rs-modal">
+  <div class="modal modal-wide">
+    <h3 id="rs-title">📹 Add RTSP Stream</h3>
+    <p style="font-size:.82rem;color:var(--text-dim);margin:-6px 0 14px">
+      A TCP proxy in nginx's <code>stream</code> context (separate from http, so it lives in <span class="mono" id="rs-file"></span>, included from
+      <span class="mono" id="rs-main"></span>). Clients connect to <code>rtsp://&lt;this server&gt;:&lt;listen&gt;/&lt;camera path&gt;</code> — the path
+      and any camera login pass straight through. Clients must use <strong>RTSP over TCP</strong> (ffmpeg <code>-rtsp_transport tcp</code>,
+      VLC "RTP over RTSP (TCP)"); UDP media can't be proxied.
+    </p>
+    <div class="form-row">
+      <div class="form-group"><label>Name <span class="req">*</span></label><input type="text" id="rs-name" placeholder="FRONT DOOR CAMERA" oninput="rsPreview()" /></div>
+      <div class="form-group"><label>Listen <span class="req">*</span></label><input type="text" id="rs-listen" placeholder="8554 or 192.0.2.10:8554" oninput="rsPreview()" />
+        <div class="form-hint">Use a distinct port per camera (8554, 8555, …).</div></div>
+    </div>
+    <div class="form-row">
+      <div class="form-group"><label>Camera / RTSP server <span class="req">*</span></label><input type="text" id="rs-upstreams" placeholder="192.0.2.20 or camera.lan:554" oninput="rsPreview()" />
+        <div class="form-hint">Port defaults to 554.</div></div>
+      <div class="form-group"><label>Fallback servers</label><input type="text" id="rs-backups" placeholder="(optional) e.g. the NVR: 192.0.2.30:554" oninput="rsPreview()" />
+        <div class="form-hint">Only used while the camera is unreachable.</div></div>
+    </div>
+    <div class="form-group"><label>Client networks <span class="req">*</span></label>
+      <input type="text" id="rs-networks" placeholder="10.0.0.0/24 192.0.2.0/24" oninput="rsPreview()" />
+      <div class="form-hint">IPs or CIDRs allowed to watch; everyone else is refused. Cameras rarely have strong auth — keep this tight (0.0.0.0/0 allows everyone).</div></div>
+    <div class="form-row">
+      <div class="form-group"><label>Connect timeout (s)</label><input type="number" id="rs-connect" value="5" min="1" max="75" oninput="rsPreview()" /></div>
+      <div class="form-group"><label>Idle timeout (s)</label><input type="number" id="rs-idle" value="300" min="10" oninput="rsPreview()" />
+        <div class="form-hint">Closes a session after this long with no data either way.</div></div>
+    </div>
+    <div style="margin-top:8px">
+      <div style="font-size:.78rem;color:var(--text-dim);text-transform:uppercase;letter-spacing:.8px;margin-bottom:6px">Changes</div>
+      <pre class="preview-pane" id="rs-preview" style="white-space:pre;overflow:auto;max-height:300px"></pre>
+    </div>
+    <div class="modal-actions">
+      <button class="btn-secondary" onclick="document.getElementById('rs-modal').classList.remove('open')">Cancel</button>
+      <button class="btn-primary" onclick="rsSave(false)">💾 Save</button>
+      <button class="btn-success" onclick="rsSave(true)">📤 Save &amp; Apply</button>
     </div>
   </div>
 </div>
@@ -1097,7 +1144,7 @@ function initSocket() {
     if (mc) { mc.log = [...(mc.log || []), line].slice(-50); const el = document.getElementById(`mclog-${cssId(id)}`); if (el) { el.textContent = mc.log.join('\n'); el.scrollTop = el.scrollHeight; } }
   });
   S.socket.on('files', debounce(({ agentId } = {}) => {
-    if (agentId === S.currentAgentId) { loadConfigs(); loadCerts(); loadSites(); loadForwardProxies(); }
+    if (agentId === S.currentAgentId) { loadConfigs(); loadCerts(); loadSites(); loadForwardProxies(); loadStreams(); }
   }, 300));
 }
 
@@ -1316,7 +1363,7 @@ async function selectAgent(id) {
   clearLog();
   resetRemoteLogs();
   switchTab('builder');
-  await Promise.all([loadSites(), loadCerts(), loadConfigs(), loadForwardProxies()]);
+  await Promise.all([loadSites(), loadCerts(), loadConfigs(), loadForwardProxies(), loadStreams()]);
 }
 
 function currentAgent() { return S.agents.find(a => a.id === S.currentAgentId); }
@@ -1962,6 +2009,120 @@ async function fpDelete(key) {
   if (!res?.ok) { toast(`❌ ${res?.error || 'failed'}`, 'error'); return; }
   toast('Marked for removal — click Apply to push', 'info');
   await Promise.all([loadForwardProxies(), loadConfigs(), loadAgents()]);
+}
+
+// ── RTSP streams ─────────────────────────────────────
+let _rs = { data: null, key: null, confPath: null, timer: null };
+
+async function loadStreams() {
+  if (!S.currentAgentId) return;
+  const agentId = S.currentAgentId;
+  const d = await apiFetch(`/api/agents/${agentId}/streams`);
+  if (agentId !== S.currentAgentId || !d || d.error) return;
+  _rs.data = d;
+  renderStreams();
+}
+
+function renderStreams() {
+  const d = _rs.data; if (!d) return;
+  const grid = document.getElementById('rs-grid');
+  if (!d.streams.length) {
+    grid.innerHTML = `<div class="empty-state" style="grid-column:1/-1;padding:20px"><div class="icon">📹</div>
+      <p style="font-size:.85rem">No RTSP streams. <strong>＋ Add RTSP Stream</strong> relays a camera's RTSP feed through this server on its own port${
+        d.streamBlock ? '' : ` — the first one also adds a <code>stream {}</code> block to ${esc(d.mainConf)}`}.</p></div>`;
+    return;
+  }
+  const a = currentAgent();
+  const vip = a && S.groups[(a.group || '').trim()]?.vip;
+  const hostFor = listen => (/^[\d.]+:|^\[/.test(listen) ? listen.replace(/:\d+$/, '') : (vip || a?.address || '<server>'));
+  grid.innerHTML = d.streams.map(p => `
+    <div class="site-card">
+      <div class="site-card-header"><span class="site-card-icon">📹</span>
+        <div style="flex:1;min-width:0"><div class="site-card-title">${esc(p.label)}</div>
+          <div class="site-card-host">rtsp://${esc(hostFor(p.listen))}:${esc(p.listen.split(':').pop())}/…</div></div></div>
+      <div class="site-card-badges">
+        <span class="badge badge-info" title="${esc(p.confPath)}">📄 ${esc(p.confPath.split('/').pop())}</span>
+        ${p.fileStatus !== 'live' ? `<span class="badge badge-warn">● ${p.fileStatus === 'added' ? 'new' : p.fileStatus}, unapplied</span>` : ''}
+        ${p.openToAll ? '<span class="badge badge-danger">⚠ open to everyone</span>' : ''}
+        ${p.backups.length ? `<span class="badge badge-accent">↪ ${p.backups.length} fallback</span>` : ''}
+      </div>
+      <div style="font-size:.75rem;color:var(--text-dim);font-family:var(--mono);line-height:1.6">
+        → ${esc(p.upstreams.join(', ') || '—')}${p.backups.length ? ` (fallback ${esc(p.backups.join(', '))})` : ''}<br>
+        clients: ${esc(p.denyAll ? (p.allowNetworks.join(', ') || 'nobody') : 'anyone')}
+      </div>
+      <div class="site-card-actions">
+        ${p.managed ? `<button class="btn-secondary btn-sm" onclick="openStreamModal('${esc(p.key)}')">✏️ Edit</button>` : ''}
+        <button class="btn-secondary btn-sm" onclick="openSiteFile('${esc(p.confPath)}')" title="Open ${esc(p.confPath)}">📄</button>
+        ${p.fileStatus !== 'live' ? `<button class="btn-primary btn-sm" onclick="doApply()">📤 Apply</button>` : ''}
+        ${p.fileStatus !== 'deleted' ? `<button class="btn-danger btn-sm" onclick="rsDelete('${esc(p.key)}')">🗑</button>` : ''}
+      </div>
+    </div>`).join('');
+}
+
+function openStreamModal(key = null) {
+  const d = _rs.data;
+  if (!d) return;
+  const p = key ? d.streams.find(x => x.key === key) : null;
+  _rs.key = key; _rs.confPath = p ? p.confPath : null;
+  const set = (id, v) => { document.getElementById(id).value = v; };
+  document.getElementById('rs-title').textContent = p ? `✏️ Edit ${p.label}` : '📹 Add RTSP Stream';
+  document.getElementById('rs-file').textContent = p ? p.confPath : d.file;
+  document.getElementById('rs-main').textContent = d.mainConf;
+  const usedPorts = new Set(d.streams.map(x => +x.listen.split(':').pop()));
+  let next = 8554; while (usedPorts.has(next)) next++;
+  set('rs-name', p?.label || ''); set('rs-listen', p?.listen || String(next));
+  set('rs-upstreams', (p?.upstreams || []).join(' ')); set('rs-backups', (p?.backups || []).join(' '));
+  set('rs-networks', (p?.allowNetworks || []).join(' '));
+  set('rs-connect', p?.connectTimeout || 5); set('rs-idle', p?.idleTimeout || 300);
+  document.getElementById('rs-modal').classList.add('open');
+  rsPreview(0);
+}
+
+function rsBody() {
+  const v = id => document.getElementById(id).value.trim();
+  return {
+    key: _rs.key || undefined, confPath: _rs.confPath || undefined,
+    fields: { name: v('rs-name'), listen: v('rs-listen'), upstreams: v('rs-upstreams'), backups: v('rs-backups'),
+      allowNetworks: v('rs-networks'), connectTimeout: v('rs-connect'), idleTimeout: v('rs-idle') },
+  };
+}
+
+function colorDiff(diff) {
+  return (diff || '# no changes').split('\n').map(l => {
+    const c = l.startsWith('@@') ? 'var(--accent2)' : l.startsWith('+') ? 'var(--success)' : l.startsWith('-') ? 'var(--danger)' : 'var(--text-dim)';
+    return `<span style="color:${c}">${esc(l)}</span>`;
+  }).join('\n');
+}
+
+function rsPreview(delay = 300) {
+  clearTimeout(_rs.timer);
+  _rs.timer = setTimeout(async () => {
+    const pre = document.getElementById('rs-preview');
+    const res = await apiFetch(`/api/agents/${S.currentAgentId}/streams/preview`, { method: 'POST', body: rsBody() });
+    if (!res) { pre.textContent = '# preview unavailable'; return; }
+    if (res.error) { pre.innerHTML = `<span style="color:var(--warn)">⚠ ${esc(res.error)}</span>`; return; }
+    const dim = t => `<span style="color:var(--text-dim)">${esc(t)}</span>`;
+    pre.innerHTML = dim(`# ${res.path}${res.created ? ' (new file)' : ''}`) + '\n' + colorDiff(res.diff) +
+      (res.mainDiff ? '\n\n' + dim(`# ${res.mainPath} — adds the stream {} block (once)`) + '\n' + colorDiff(res.mainDiff) : '');
+  }, delay);
+}
+
+async function rsSave(apply) {
+  const res = await apiFetch(`/api/agents/${S.currentAgentId}/streams`, { method: _rs.key ? 'PUT' : 'POST', body: rsBody() });
+  if (!res?.ok) { toast(`❌ ${res?.error || 'Save failed'}`, 'error'); return; }
+  document.getElementById('rs-modal').classList.remove('open');
+  await Promise.all([loadStreams(), loadConfigs(), loadAgents()]);
+  if (apply) doApply();
+  else toast(`Saved to ${res.path.split('/').pop()} — click Apply to push`, 'success');
+}
+
+async function rsDelete(key) {
+  const p = _rs.data.streams.find(x => x.key === key);
+  if (!confirm(`Remove RTSP stream "${p.label}" (listen ${p.listen}) on the next Apply?`)) return;
+  const res = await apiFetch(`/api/agents/${S.currentAgentId}/streams?key=${encodeURIComponent(key)}&path=${encodeURIComponent(p.confPath)}`, { method: 'DELETE' });
+  if (!res?.ok) { toast(`❌ ${res?.error || 'failed'}`, 'error'); return; }
+  toast('Marked for removal — click Apply to push', 'info');
+  await Promise.all([loadStreams(), loadConfigs(), loadAgents()]);
 }
 
 async function openSiteFile(confPath) {
@@ -2795,11 +2956,13 @@ function renderAccess() {
     if (f && e.result !== f) continue;
     if (q && ![e.client, e.host, e.uri, e.upstream, e.user, e.method, String(e.status)].some(v => v && String(v).toLowerCase().includes(q))) continue;
     const t = new Date(e.at);
-    const req = `${e.method} ${e.method === 'CONNECT' ? '' : esc(e.uri)}${e.protocol ? ` <span style="color:var(--text-dim)">${esc(e.protocol)}</span>` : ''}`;
+    const req = e.stream
+      ? `${esc(e.method)} stream <span style="color:var(--text-dim)">${esc(rsLabelForPort(e.port))} · ${formatBytes(e.bytesIn || 0)} in</span>`
+      : `${e.method} ${e.method === 'CONNECT' ? '' : esc(e.uri)}${e.protocol ? ` <span style="color:var(--text-dim)">${esc(e.protocol)}</span>` : ''}`;
     rows.push(`<tr class="${e.result}" title="${esc(e.userAgent || '')}">
       <td>${esc(isNaN(t) ? e.at : t.toLocaleTimeString())}</td>
       <td>${esc(e.client)}${e.user ? ` <span style="color:var(--accent2)">(${esc(e.user)})</span>` : ''}</td>
-      <td>${esc(e.host)}${e.port && !['80', '443'].includes(e.port) ? `<span style="color:var(--text-dim)">:${esc(e.port)}</span>` : ''}</td>
+      <td>${esc(e.host)}${e.port && (e.stream || !['80', '443'].includes(e.port)) ? `<span style="color:var(--text-dim)">:${esc(e.port)}</span>` : ''}</td>
       <td class="req">${req}</td>
       <td><span class="rl-st ${e.result}">${e.status}</span></td>
       <td>${esc(e.upstream || '—')}${e.upstreamStatus && e.upstreamStatus !== String(e.status) ? ` <span style="color:var(--text-dim)">(${esc(e.upstreamStatus)})</span>` : ''}</td>
@@ -2812,6 +2975,10 @@ function renderAccess() {
       S.rl.access.length ? 'No requests match the filter.' : st && st.enabled && !st.pending ? 'Waiting for requests…' : 'Enable request logging above to see connections.'}</td></tr>`;
 }
 const renderAccessDebounced = debounce(renderAccess, 200);
+function rsLabelForPort(port) {
+  const s = (_rs.data?.streams || []).find(x => x.listen.split(':').pop() === String(port));
+  return s ? s.label : `port ${port}`;
+}
 
 function renderKeepalived() {
   renderRemoteLogSetup();
@@ -2836,7 +3003,12 @@ function toast(msg, type = 'info') {
 function esc(s) {
   return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');
 }
-function formatBytes(b) { return b < 1024 ? b + ' B' : (b/1024).toFixed(1) + ' KB'; }
+function formatBytes(b) {
+  if (b < 1024) return b + ' B';
+  const u = ['KB', 'MB', 'GB', 'TB']; let i = -1;
+  do { b /= 1024; i++; } while (b >= 1024 && i < u.length - 1);
+  return b.toFixed(1) + ' ' + u[i];
+}
 function debounce(fn, ms) { let t; return (...args) => { clearTimeout(t); t = setTimeout(() => fn(...args), ms); }; }
 function formatDate(iso) { return new Date(iso).toLocaleString(); }
 </script>

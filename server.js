@@ -51,6 +51,7 @@ const issuers = require('./lib/issuers');
 const fwdproxy = require('./lib/fwdproxy');
 const branding = require('./lib/branding');
 const logrx = require('./lib/logrx');
+const streams = require('./lib/streams');
 const dgram = require('dgram');
 
 // ---------------------------------------------------------------------------
@@ -586,9 +587,11 @@ app.post('/api/agents/:id/sync', requireAuth, async (req, res) => {
 function parsedConfFiles(agentId) {
   const st = store.readState(agentId);
   const desired = store.desiredFiles(st);
+  const agent = store.findAgent(agentId);
+  const streamPrefix = streams.streamDir(agent ? nginxDir(agent) : '/etc/nginx') + '/';   // stream {} servers aren't http sites
   const out = [];
   for (const name of Object.keys(desired).sort()) {
-    if (!name.endsWith('.conf') || desired[name].certificateMeta) continue;
+    if (!name.endsWith('.conf') || desired[name].certificateMeta || name.startsWith(streamPrefix)) continue;
     const content = readFileContent(st, name);
     if (typeof content !== 'string') continue;
     let sites = [];
@@ -741,14 +744,29 @@ function receiverAddressFor(agent) {
   });
 }
 
+function mainConfPath(agent) {
+  const st = store.readState(agent.id);
+  return st.configPath || path.posix.join(nginxDir(agent), 'nginx.conf');
+}
+
+// nginx.conf has the stream {} block nginx-manager added (which includes the stream session log)
+function streamLogWired(st, agent) {
+  const main = readFileContent(st, mainConfPath(agent));
+  return typeof main === 'string' && main.includes('nginx-manager/remote-stream-log');
+}
+
+function remoteLogWant(st, agent, receiver) {
+  return logrx.remoteLogFiles(nginxDir(agent), receiver, LOG_PORT, { stream: streamLogWired(st, agent) });
+}
+
 async function remoteLogStatus(agent) {
   const st = store.readState(agent.id);
   const desired = store.desiredFiles(st);
   const paths = logrx.remoteLogPaths(nginxDir(agent));
   const receiver = await receiverAddressFor(agent);
-  const want = receiver && LOG_PORT ? logrx.remoteLogFiles(nginxDir(agent), receiver, LOG_PORT) : null;
+  const want = receiver && LOG_PORT ? remoteLogWant(st, agent, receiver) : null;
   const enabled = !!desired[paths.conf];
-  const statuses = [paths.conf, paths.inc].map(p => (desired[p] ? fileStatus(st, p) : (st.draft[p] && st.draft[p].deleted ? 'deleted' : null)));
+  const statuses = [paths.conf, paths.inc, paths.streamInc].map(p => (desired[p] ? fileStatus(st, p) : (st.draft[p] && st.draft[p].deleted ? 'deleted' : null)));
   return {
     available: !!LOG_PORT,
     port: LOG_PORT,
@@ -777,11 +795,11 @@ app.post('/api/agents/:id/remote-logs', requireAuth, async (req, res) => {
   if (req.body && req.body.enabled) {
     const receiver = await receiverAddressFor(agent);
     if (!receiver) return res.status(409).json({ error: "Can't work out the manager's address for this server — set LOG_RECEIVER_HOST" });
-    for (const [p, text] of Object.entries(logrx.remoteLogFiles(dir, receiver, LOG_PORT))) {
+    for (const [p, text] of Object.entries(remoteLogWant(st, agent, receiver))) {
       if (readFileContent(st, p) !== text) store.stageFile(agent.id, p, text);
     }
   } else {
-    for (const p of [paths.conf, paths.inc]) {
+    for (const p of [paths.conf, paths.inc, paths.streamInc]) {
       if (store.currentFile(st, p)) store.stageDelete(agent.id, p);
       else if (st.draft[p]) { const s2 = store.readState(agent.id); delete s2.draft[p]; store.writeState(agent.id, s2); }
     }
@@ -801,6 +819,114 @@ app.get('/api/agents/:id/logs', requireAuth, (req, res) => {
 app.delete('/api/agents/:id/logs', requireAuth, (req, res) => {
   const agent = requireAgent(req, res); if (!agent) return;
   logReceiver.clear(agent.id, req.query.kind === 'keepalived' ? 'keepalived' : 'access');
+  res.json({ ok: true });
+});
+
+// ---------------------------------------------------------------------------
+// RTSP streams — TCP proxies in the stream {} context (stream.d/rtsp-streams.conf)
+// ---------------------------------------------------------------------------
+function discoveredStreams(agent) {
+  const st = store.readState(agent.id);
+  const dir = streams.streamDir(nginxDir(agent)) + '/';
+  const out = [];
+  for (const name of Object.keys(store.desiredFiles(st)).filter(n => n.startsWith(dir) && n.endsWith('.conf')).sort()) {
+    const text = readFileContent(st, name);
+    if (typeof text !== 'string') continue;
+    let found;
+    try { found = streams.findStreams(text); } catch { continue; }
+    for (const p of found) out.push({ ...streams.publicStream(p), confPath: name, fileStatus: fileStatus(st, name) });
+  }
+  return out;
+}
+
+function streamsInfo(agent) {
+  const st = store.readState(agent.id);
+  const main = readFileContent(st, mainConfPath(agent));
+  return {
+    file: streams.streamsFile(nginxDir(agent)),
+    mainConf: mainConfPath(agent),
+    streamBlock: typeof main === 'string' && streams.streamBlockState(main, nginxDir(agent)).includes,
+    streams: discoveredStreams(agent),
+  };
+}
+
+function planStream(agent, body) {
+  const st = store.readState(agent.id);
+  const dir = nginxDir(agent);
+  const confPath = body.key ? cleanRemotePath(body.confPath) : streams.streamsFile(dir);
+  if (!confPath || !confPath.startsWith(streams.streamDir(dir) + '/')) throw Object.assign(new Error('confPath must be in stream.d'), { status: 400 });
+  const before = readFileContent(st, confPath);
+  if (before === undefined) throw Object.assign(new Error('File not synced from the agent yet'), { status: 409 });
+  const mainPath = mainConfPath(agent);
+  const mainBefore = readFileContent(st, mainPath);
+  if (typeof mainBefore !== 'string') throw Object.assign(new Error(`${mainPath} not synced from the agent yet`), { status: 409 });
+  // ports used by every other config file (http servers, forward proxies, other stream files)
+  const desired = store.desiredFiles(st);
+  const others = Object.keys(desired).filter(n => n.endsWith('.conf') && n !== confPath && !desired[n].certificateMeta)
+    .map(n => readFileContent(st, n)).filter(t => typeof t === 'string');
+  const p = streams.plan(before || '', { key: body.key || null, fields: body.fields || {}, usedPorts: streams.listenPorts(others) });
+  const mainAfter = streams.ensureStreamBlock(mainBefore, dir);
+  return { ...p, confPath, before: before || '', created: before === null, mainPath, mainBefore, mainAfter };
+}
+
+app.get('/api/agents/:id/streams', requireAuth, (req, res) => {
+  const agent = requireAgent(req, res); if (!agent) return;
+  res.json(streamsInfo(agent));
+});
+
+app.post('/api/agents/:id/streams/preview', requireAuth, (req, res) => {
+  const agent = requireAgent(req, res); if (!agent) return;
+  try {
+    const p = planStream(agent, req.body || {});
+    res.json({
+      path: p.confPath, created: p.created, diff: unifiedDiff(p.before, p.conf),
+      mainPath: p.mainPath, mainDiff: p.mainAfter !== p.mainBefore ? unifiedDiff(p.mainBefore, p.mainAfter) : null,
+    });
+  } catch (err) { sendError(res, err); }
+});
+
+async function saveStream(req, res) {
+  const agent = requireAgent(req, res); if (!agent) return;
+  try {
+    const p = planStream(agent, req.body || {});
+    if (p.mainAfter !== p.mainBefore) store.stageFile(agent.id, p.mainPath, p.mainAfter);
+    if (p.conf !== p.before) store.stageFile(agent.id, p.confPath, p.conf);
+    // request logging already on → also log stream sessions, now that the stream block includes it
+    const st = store.readState(agent.id);
+    const paths = logrx.remoteLogPaths(nginxDir(agent));
+    if (LOG_PORT && store.desiredFiles(st)[paths.conf] && !store.desiredFiles(st)[paths.streamInc] && streamLogWired(st, agent)) {
+      const receiver = await receiverAddressFor(agent);
+      const want = receiver && remoteLogWant(st, agent, receiver);
+      if (want && want[paths.streamInc]) store.stageFile(agent.id, paths.streamInc, want[paths.streamInc]);
+    }
+    io.emit('files', { agentId: agent.id });
+    io.emit('agents');
+    res.json({ ok: true, key: p.key, path: p.confPath, created: p.created, mainChanged: p.mainAfter !== p.mainBefore });
+  } catch (err) { sendError(res, err); }
+}
+app.post('/api/agents/:id/streams', requireAuth, saveStream);
+app.put('/api/agents/:id/streams', requireAuth, (req, res) => {
+  if (!req.body || !req.body.key) return res.status(400).json({ error: 'key required' });
+  saveStream(req, res);
+});
+
+app.delete('/api/agents/:id/streams', requireAuth, (req, res) => {
+  const agent = requireAgent(req, res); if (!agent) return;
+  const confPath = cleanRemotePath(req.query.path);
+  if (!confPath || !req.query.key || !confPath.startsWith(streams.streamDir(nginxDir(agent)) + '/')) {
+    return res.status(400).json({ error: 'path (in stream.d) and key required' });
+  }
+  const st = store.readState(agent.id);
+  const before = readFileContent(st, confPath);
+  if (typeof before !== 'string') return res.status(409).json({ error: 'File not synced from the agent yet' });
+  try {
+    const r = streams.remove(before, String(req.query.key));
+    if (!r.empty) store.stageFile(agent.id, confPath, r.conf);
+    else if (store.currentFile(st, confPath)) store.stageDelete(agent.id, confPath);
+    else { const s2 = store.readState(agent.id); delete s2.draft[confPath]; store.writeState(agent.id, s2); }
+  } catch (err) { return sendError(res, err); }
+  io.emit('files', { agentId: agent.id });
+  io.emit('agents');
   res.json({ ok: true });
 });
 
