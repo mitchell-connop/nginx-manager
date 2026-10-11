@@ -1991,7 +1991,7 @@ function pxRenderBackends(list) {
   (list.length ? list : ['']).forEach(v => {
     const row = document.createElement('div');
     row.className = 'upstream-item';
-    row.innerHTML = `<input type="text" placeholder="192.168.1.10:8080" oninput="pxPreview()" />` +
+    row.innerHTML = `<input type="text" placeholder="10.0.0.10:8080" oninput="pxPreview()" />` +
       `<button class="btn-danger btn-xs" onclick="this.closest('.upstream-item').remove(); pxBackendsChanged()">✕</button>`;
     row.querySelector('input').value = v;
     ul.appendChild(row);

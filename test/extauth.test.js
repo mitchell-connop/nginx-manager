@@ -119,7 +119,7 @@ test('service-account bind failure is reported as such, not as a bad user passwo
 });
 
 test('login name forms: bare, DOMAIN\\user, user@upn → one canonical user', async () => {
-  assert.deepStrictEqual(ea.parseLogin('mjc.local\\Mitch.Connop'), { name: 'Mitch.Connop', upn: null, domain: 'mjc.local' });
+  assert.deepStrictEqual(ea.parseLogin('corp.example\\Jane.Doe'), { name: 'Jane.Doe', upn: null, domain: 'corp.example' });
   assert.deepStrictEqual(ea.parseLogin('MJC\\al'), { name: 'al', upn: null, domain: 'MJC' });
   assert.deepStrictEqual(ea.parseLogin('al@example.com'), { name: 'al', upn: 'al@example.com', domain: 'example.com' });
   const filters = [];

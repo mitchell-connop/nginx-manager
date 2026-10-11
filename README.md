@@ -101,7 +101,7 @@ Edit `.env` (see `.env.example`):
 | `ADMIN_PASSWORD` | **(required)** | Login password — a bcrypt hash (recommended) or plain text |
 | `GRPC_PORT` | `8443` | Port NGINX Agent connects to (gRPC over TLS) |
 | `AGENT_CONNECT_HOST` | browser hostname | Host/IP agents use to reach the manager (used in setup instructions) |
-| `GRPC_TLS_SANS` | hostname + IPv4s | Names/IPs in the generated gRPC certificate, e.g. `DNS:nginx-manager.lan,IP:172.16.40.10` |
+| `GRPC_TLS_SANS` | hostname + IPv4s | Names/IPs in the generated gRPC certificate, e.g. `DNS:nginx-manager.lan,IP:10.0.0.10` |
 | `GRPC_TLS_CERT` / `GRPC_TLS_KEY` / `GRPC_TLS_CA` | — | Use your own certificate instead |
 | `LOG_RECEIVER_PORT` | `5514` | UDP syslog port for the Log tab's Connections / Keepalived views; `off` disables it. Packets are only accepted from enrolled agents' addresses |
 | `LOG_RECEIVER_HOST` | auto | Address the servers send syslog to (default: the manager's local address on the route to each server) |
