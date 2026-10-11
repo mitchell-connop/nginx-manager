@@ -306,9 +306,12 @@
     .badge-accent  { background: rgba(0,212,170,.15); color: var(--accent); border: 1px solid rgba(0,212,170,.3); }
 
     /* ── MODALS ── */
-    .modal-backdrop { display: none; position: fixed; inset: 0; background: rgba(0,0,0,.65); backdrop-filter: blur(4px); z-index: 200; align-items: center; justify-content: center; overflow-y: auto; padding: 20px; }
+    .modal-backdrop { display: none; position: fixed; inset: 0; background: rgba(0,0,0,.65); backdrop-filter: blur(4px); z-index: 200; align-items: flex-start; justify-content: center; overflow-y: auto; padding: 20px; }
     .modal-backdrop.open { display: flex; }
-    .modal { background: var(--surface); border: 1px solid var(--border); border-radius: 16px; padding: 32px; width: 560px; max-width: 100%; }
+    .modal { background: var(--surface); border: 1px solid var(--border); border-radius: 16px; padding: 32px; width: 560px; max-width: 100%; margin: auto; }
+    /* settings: header, tabs and Close stay put; only the tab content scrolls */
+    .modal-scroll { display: flex; flex-direction: column; max-height: calc(100vh - 40px); }
+    .modal-scroll > .modal-body { flex: 1 1 auto; min-height: 0; overflow-y: auto; padding-right: 6px; }
     .modal-wide { width: 740px; }
     .modal h3 { font-size: 1.1rem; margin-bottom: 24px; color: var(--accent); display: flex; align-items: center; gap: 8px; }
     .modal-actions { display: flex; gap: 10px; justify-content: flex-end; margin-top: 24px; }
@@ -1262,7 +1265,7 @@
 
 <!-- ── SETTINGS MODAL ── -->
 <div class="modal-backdrop" id="settings-modal">
-  <div class="modal modal-wide" style="width:940px">
+  <div class="modal modal-wide modal-scroll" style="width:940px">
     <h3>⚙ Settings</h3>
     <div class="log-subtabs" id="set-tabs">
       <button class="log-subtab active" data-st="account">My account</button>
@@ -1272,7 +1275,7 @@
       <button class="log-subtab admin-only" data-st="audit">Audit log</button>
       <button class="log-subtab admin-only" data-st="healthdef">Health checks</button>
     </div>
-    <div id="set-body" style="min-height:240px"></div>
+    <div id="set-body" class="modal-body" style="min-height:240px"></div>
     <div class="modal-actions"><button class="btn-secondary" onclick="document.getElementById('settings-modal').classList.remove('open')">Close</button></div>
   </div>
 </div>
@@ -3433,7 +3436,8 @@ function renderSignin(a) {
     <p style="font-size:.84rem;color:var(--text-dim);margin-bottom:12px">Lets directory accounts sign in. The built-in <code>admin</code> and local users always work and take precedence;
       a directory user's role comes from their groups (LDAP) or a reply attribute (RADIUS) at every sign-in.</p>
     <div class="uv-card"><h4>LDAP / Active Directory</h4>
-      <div class="toggle-group"><label for="au-l-on">Enabled</label><label class="toggle"><input type="checkbox" id="au-l-on" ${L.enabled ? 'checked' : ''}><span class="toggle-slider"></span></label></div>
+      <div class="toggle-group"><label for="au-l-on">Enabled</label><label class="toggle"><input type="checkbox" id="au-l-on" ${L.enabled ? 'checked' : ''} onchange="authShow()"><span class="toggle-slider"></span></label></div>
+      <div id="au-l-body">
       <div class="form-row"><div class="form-group"><label>Server URL</label><input type="text" id="au-l-url" value="${esc(L.url)}" placeholder="ldaps://dc01.example.com:636"></div>
         <div class="form-group"><label>Base DN</label><input type="text" id="au-l-base" value="${esc(L.baseDn)}" placeholder="DC=example,DC=com"></div></div>
       <div class="form-row-3">
@@ -3455,9 +3459,10 @@ function renderSignin(a) {
       ${['admin', 'operator', 'viewer'].map(r => `<div class="form-group"><label>${r}</label><input type="text" id="au-l-g-${r}" value="${esc(L.groups[r])}" placeholder="CN=nginx-manager-${r}s,OU=Groups,DC=example,DC=com"></div>`).join('')}
       <div class="form-row"><div class="toggle-group"><label for="au-l-nested">Include nested groups (AD)</label><label class="toggle"><input type="checkbox" id="au-l-nested" ${L.nested ? 'checked' : ''}><span class="toggle-slider"></span></label></div>
         <div class="form-group"><label>Users in none of these groups</label>${roleSel('au-l-def', L.defaultRole)}</div></div>
-      <div class="form-hint" id="au-l-warn"></div></div>
+      <div class="form-hint" id="au-l-warn"></div></div></div>
     <div class="uv-card"><h4>RADIUS</h4>
-      <div class="toggle-group"><label for="au-r-on">Enabled</label><label class="toggle"><input type="checkbox" id="au-r-on" ${R.enabled ? 'checked' : ''}><span class="toggle-slider"></span></label></div>
+      <div class="toggle-group"><label for="au-r-on">Enabled</label><label class="toggle"><input type="checkbox" id="au-r-on" ${R.enabled ? 'checked' : ''} onchange="authShow()"><span class="toggle-slider"></span></label></div>
+      <div id="au-r-body">
       <div class="form-row-3"><div class="form-group"><label>Server</label><input type="text" id="au-r-host" value="${esc(R.host)}" placeholder="192.0.2.10"></div>
         <div class="form-group"><label>Port</label><input type="number" id="au-r-port" value="${R.port}"></div>
         <div class="form-group"><label>Shared secret</label><input type="password" id="au-r-secret" placeholder="${R.secretSet ? '(unchanged — stored)' : ''}" autocomplete="new-password"></div>
@@ -3467,18 +3472,27 @@ function renderSignin(a) {
       <div class="form-row"><div class="form-group"><label>Role comes from the reply attribute</label><select id="au-r-attr">${['Class', 'Filter-Id'].map(x => `<option ${R.roleAttribute === x ? 'selected' : ''}>${x}</option>`).join('')}</select></div>
         <div class="form-group"><label>No matching value</label>${roleSel('au-r-def', R.defaultRole)}</div></div>
       <div class="form-row-3">${['admin', 'operator', 'viewer'].map(r => `<div class="form-group"><label>value for ${r}</label><input type="text" id="au-r-v-${r}" value="${esc(R.roles[r])}"></div>`).join('')}</div>
-      <div class="form-hint">PAP with Message-Authenticator (works with NPS, FreeRADIUS, most MFA proxies that accept PAP). Challenge/response MFA prompts aren't supported.</div></div>
-    <div class="form-group" style="max-width:50%"><label>Try in this order</label><select id="au-order"><option value="ldap,radius" ${a.order[0] !== 'radius' ? 'selected' : ''}>LDAP, then RADIUS</option><option value="radius,ldap" ${a.order[0] === 'radius' ? 'selected' : ''}>RADIUS, then LDAP</option></select></div>
+      <div class="form-hint">PAP with Message-Authenticator (works with NPS, FreeRADIUS, most MFA proxies that accept PAP). Challenge/response MFA prompts aren't supported.</div></div></div>
+    <div class="form-group" id="au-order-wrap" style="max-width:50%"><label>Try in this order</label><select id="au-order"><option value="ldap,radius" ${a.order[0] !== 'radius' ? 'selected' : ''}>LDAP, then RADIUS</option><option value="radius,ldap" ${a.order[0] === 'radius' ? 'selected' : ''}>RADIUS, then LDAP</option></select></div>
     <div style="display:flex;justify-content:flex-end"><button class="btn-primary btn-sm" onclick="authSave()">💾 Save</button></div>
-    <div class="uv-card" style="margin-top:12px"><h4>Test a sign-in</h4><div class="sub">Uses the saved settings; no session is created.</div>
+    <div class="uv-card" id="au-test-card" style="margin-top:12px"><h4>Test a sign-in</h4><div class="sub">Uses the saved settings; no session is created.</div>
       <div class="form-row-3"><div class="form-group"><label>Username</label><input type="text" id="au-t-user" autocomplete="off" autocapitalize="none"></div>
         <div class="form-group"><label>Password</label><input type="password" id="au-t-pass" autocomplete="new-password"></div>
         <div class="form-group"><label>Provider</label><select id="au-t-src"><option value="">in order</option><option value="ldap">LDAP</option><option value="radius">RADIUS</option></select></div></div>
       <button class="btn-secondary btn-sm" onclick="authTest()">▶ Test</button>
       <pre class="preview-pane" id="au-t-out" style="display:none;white-space:pre-wrap"></pre></div>`;
   authModeUi();
+  authShow();
   ['au-l-url', 'au-l-stls', 'au-l-verify'].forEach(id => document.getElementById(id).addEventListener('input', authWarn));
   authWarn();
+}
+// collapse a provider's settings while it's switched off; order and test only matter when something is on
+function authShow() {
+  const l = document.getElementById('au-l-on').checked, r = document.getElementById('au-r-on').checked;
+  document.getElementById('au-l-body').style.display = l ? '' : 'none';
+  document.getElementById('au-r-body').style.display = r ? '' : 'none';
+  document.getElementById('au-order-wrap').style.display = l && r ? '' : 'none';
+  document.getElementById('au-test-card').style.display = l || r ? '' : 'none';
 }
 function authPreset(v) {
   const p = LDAP_PRESETS[v]; if (!p) return;
