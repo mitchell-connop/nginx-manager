@@ -60,6 +60,8 @@ const { History, changesBetween } = require('./lib/history');
 const groupsync = require('./lib/groupsync');
 const health = require('./lib/health');
 const { Alerts } = require('./lib/alerts');
+const defaultServer = require('./lib/defaultserver');
+const { ExternalAuth } = require('./lib/extauth');
 const fs = require('fs');
 const dgram = require('dgram');
 
@@ -133,6 +135,7 @@ logReceiver.on('entries', ({ agentId, kind, entries }) => {
 const cve = new CveScanner({ cacheFile: path.join(store.DATA_DIR, 'cve-cache.json') });
 const users = new Users({ file: path.join(store.DATA_DIR, 'users.json'), adminPassword: ADMIN_PASS });
 const audit = new AuditLog({ file: path.join(store.DATA_DIR, 'audit.log') });
+const extAuth = new ExternalAuth({ file: path.join(store.DATA_DIR, 'auth.json') });
 const history = new History({ dir: path.join(store.DATA_DIR, 'history') });
 const HEALTH_SETTINGS = path.join(store.DATA_DIR, 'health-settings.json');
 let healthSettings = health.loadSettings(HEALTH_SETTINGS);
@@ -147,7 +150,10 @@ healthState.on('status', (agentId, sample) => usage.recordConnections(agentId, s
 const rawConfigApply = mp.configApply.bind(mp);
 mp.configApply = async (agentId, opts = {}) => {
   const user = opts.user || 'system';
-  if (!opts.files) { try { await refreshHelperConfig(agentId); } catch (err) { console.warn('[nginx-manager] helper config:', err.message); } }
+  if (!opts.files) {
+    try { await refreshHelperConfig(agentId); } catch (err) { console.warn('[nginx-manager] helper config:', err.message); }
+    try { refreshDefaultServer(agentId); } catch (err) { console.warn('[nginx-manager] default server:', err.message); }
+  }
   const result = await rawConfigApply(agentId, opts);
   const agent = store.findAgent(agentId);
   const label = opts.label || (opts.files ? 'Certificate deployment' : 'Apply');
@@ -324,6 +330,12 @@ app.use(express.static(path.join(__dirname, 'public')));
 function sessionUser(req) {
   const s = req.session;
   if (!s || !s.authenticated || !s.user) return null;
+  if (s.user.source) {
+    // directory user: role fixed at sign-in; disabling the provider (or a same-named local account) ends the session
+    const cfg = extAuth.settings[s.user.source];
+    if (!cfg || !cfg.enabled || users.exists(s.user.username)) return null;
+    return { username: s.user.username, role: s.user.role, source: s.user.source };
+  }
   return users.lookup(s.user.username);
 }
 
@@ -336,7 +348,7 @@ function requireAuth(req, res, next) {
 
 // Role needed per request: viewers read, operators change config, admins manage the manager itself.
 const ADMIN_ONLY = [
-  [/^\/api\/users/, 'ALL'], [/^\/api\/alerts/, 'ALL'], [/^\/api\/audit/, 'ALL'],
+  [/^\/api\/users/, 'ALL'], [/^\/api\/alerts/, 'ALL'], [/^\/api\/audit/, 'ALL'], [/^\/api\/auth-settings/, 'ALL'],
   [/^\/api\/branding/, 'WRITE'], [/^\/api\/agents\/?$/, 'WRITE'], [/^\/api\/agents\/[^/]+\/?$/, 'DELETE'],
   [/^\/api\/agents\/[^/]+\/token$/, 'WRITE'], [/^\/api\/agents\/[^/]+\/setup$/, 'ALL'],
   [/^\/api\/health\/settings/, 'WRITE'],
@@ -392,19 +404,29 @@ app.post('/api/login', async (req, res) => {
     return res.status(429).json({ error: 'Too many attempts — try again later' });
   }
   const username = String((req.body && req.body.username) || 'admin').trim().toLowerCase();
-  const user = await users.verify(username, req.body && req.body.password);
+  const password = req.body && req.body.password;
+  let user = await users.verify(username, password);
+  let ext = null;
+  // directory sign-in only for names that aren't local accounts (no ambiguity, no fallback on a wrong local password)
+  if (!user && !users.exists(username) && extAuth.enabled()) {
+    ext = await extAuth.authenticate(username, password).catch(e => ({ ok: false, reason: e.message }));
+    if (ext.ok) {
+      user = { username, role: ext.role, source: ext.source };
+      users.recordExternal({ username, role: ext.role, source: ext.source, displayName: ext.displayName });
+    }
+  }
   if (!user) {
     const cur = f && f.until > Date.now() ? f : { count: 0 };
     loginFailures.set(ip, { count: cur.count + 1, until: Date.now() + LOCKOUT_MS });
-    audit.record({ user: username.slice(0, 64), ip, action: 'login', result: 'failed' });
+    audit.record({ user: username.slice(0, 64), ip, action: 'login', result: 'failed', detail: ext && ext.reason ? `${(ext.tried || []).map(t => t.source).join('/') || 'directory'}: ${ext.reason}` : undefined });
     return res.status(401).json({ error: 'Invalid username or password' });
   }
   loginFailures.delete(ip);
   req.session.regenerate(err => {
     if (err) return res.status(500).json({ error: 'Session error' });
     req.session.authenticated = true;
-    req.session.user = { username: user.username };
-    audit.record({ user: user.username, ip, action: 'login', result: 'ok' });
+    req.session.user = user.source ? { username: user.username, role: user.role, source: user.source } : { username: user.username };
+    audit.record({ user: user.username, ip, action: 'login', result: 'ok', detail: user.source ? `via ${user.source} as ${user.role}` : undefined });
     res.json({ ok: true, user });
   });
 });
@@ -417,6 +439,7 @@ app.post('/api/logout', (req, res) => {
 app.post('/api/me/password', requireAuth, async (req, res) => {
   const { current, password } = req.body || {};
   if (req.user.builtin) return res.status(400).json({ error: 'The built-in admin password is set with ADMIN_PASSWORD in .env' });
+  if (req.user.source) return res.status(400).json({ error: `Your password is managed by the ${req.user.source.toUpperCase()} directory` });
   if (!(await users.verify(req.user.username, current))) return res.status(403).json({ error: 'Current password is wrong' });
   try { users.update(req.user.username, { password }); } catch (err) { return sendError(res, err); }
   audit.record({ user: req.user.username, ip: req.ip, action: 'user.password', target: req.user.username, result: 'ok' });
@@ -439,6 +462,20 @@ app.delete('/api/users/:username', requireAuth, (req, res) => {
   if (req.params.username === req.user.username) return res.status(400).json({ error: "You can't remove yourself" });
   try { users.remove(req.params.username); res.json({ ok: true }); } catch (err) { sendError(res, err); }
 });
+// Directory sign-in (admin): LDAP / AD and RADIUS
+app.get('/api/auth-settings', requireAuth, (req, res) => res.json(extAuth.view()));
+app.put('/api/auth-settings', requireAuth, (req, res) => {
+  try { res.json(extAuth.update(req.body || {})); } catch (err) { sendError(res, err); }
+});
+// try a sign-in without creating a session — shows each step so misconfiguration is easy to spot
+app.post('/api/auth-settings/test', requireAuth, async (req, res) => {
+  const { username, password, source } = req.body || {};
+  const r = await extAuth.authenticate(String(username || '').trim().toLowerCase(), password, { only: source || undefined }).catch(e => ({ ok: false, reason: e.message }));
+  audit.record({ user: req.user.username, ip: req.ip, action: 'auth.test', target: String(username || '').slice(0, 64), result: r.ok ? 'ok' : 'failed', detail: r.ok ? `${r.source} → ${r.role}` : r.reason });
+  res.json({ ok: r.ok, role: r.role || null, source: r.source || null, reason: r.reason || null,
+    tried: (r.tried || []).map(t => ({ source: t.source, ok: t.ok, role: t.role, reason: t.reason, dn: t.dn, groups: t.groups, trace: t.trace })) });
+});
+
 app.get('/api/audit', requireAuth, (req, res) => {
   res.json(audit.query({ limit: Math.min(parseInt(req.query.limit, 10) || 200, 2000), user: req.query.user, agent: req.query.agent, action: req.query.action, q: req.query.q }));
 });
@@ -1489,6 +1526,69 @@ app.post('/api/cve/refresh', requireAuth, async (req, res) => {
   res.json(cveReport());
 });
 
+
+// ---------------------------------------------------------------------------
+// Unknown hosts — managed default_server catch-all (lib/defaultserver)
+// ---------------------------------------------------------------------------
+function defaultServerPath(agent) { return path.posix.join(confDir(agent), defaultServer.FILE); }
+
+function planDefaultServer(agent, settings) {
+  const own = defaultServerPath(agent);
+  const st = store.readState(agent.id);
+  const before = readFileContent(st, own);
+  const texts = agentConfTexts(agent.id);
+  const scan = defaultServer.scan(texts, own);
+  const after = settings ? defaultServer.generate(settings, scan.listeners) : null;
+  return { path: own, before: typeof before === 'string' ? before : null, after, scan };
+}
+
+// keep the catch-all covering every listener when sites/ports change
+function refreshDefaultServer(agentId) {
+  const agent = store.findAgent(agentId);
+  if (!agent) return;
+  const own = defaultServerPath(agent);
+  const cur = readFileContent(store.readState(agentId), own);
+  const settings = defaultServer.parseOwn(cur);
+  if (!settings) return;
+  const p = planDefaultServer(agent, settings);
+  if (p.after !== cur) store.stageFile(agentId, own, p.after);
+}
+
+app.get('/api/agents/:id/default-server', requireAuth, (req, res) => {
+  const agent = requireAgent(req, res); if (!agent) return;
+  const p = planDefaultServer(agent, null);
+  const st = store.readState(agent.id);
+  res.json({ path: p.path, settings: defaultServer.parseOwn(p.before), fileStatus: p.before === null ? null : fileStatus(st, p.path), ...p.scan });
+});
+
+function defaultServerChange(agent, body) {
+  const enabled = !!(body && body.enabled);
+  const p = planDefaultServer(agent, enabled ? (body.settings || {}) : null);
+  if (enabled && !p.scan.listeners.length) throw Object.assign(new Error('No listeners to cover — no name-based sites found'), { status: 409 });
+  return p;
+}
+
+app.post('/api/agents/:id/default-server/preview', requireAuth, (req, res) => {
+  const agent = requireAgent(req, res); if (!agent) return;
+  try {
+    const p = defaultServerChange(agent, req.body);
+    res.json({ path: p.path, diff: unifiedDiff(p.before || '', p.after || ''), ...p.scan });
+  } catch (err) { sendError(res, err); }
+});
+
+app.put('/api/agents/:id/default-server', requireAuth, (req, res) => {
+  const agent = requireAgent(req, res); if (!agent) return;
+  try {
+    const p = defaultServerChange(agent, req.body);
+    if (p.after) store.stageFile(agent.id, p.path, p.after);
+    else if (store.currentFile(store.readState(agent.id), p.path)) store.stageDelete(agent.id, p.path);
+    else { const s2 = store.readState(agent.id); delete s2.draft[p.path]; store.writeState(agent.id, s2); }
+  } catch (err) { return sendError(res, err); }
+  io.emit('files', { agentId: agent.id });
+  io.emit('agents');
+  res.json({ ok: true });
+});
+
 // ---------------------------------------------------------------------------
 // RTSP streams — TCP proxies in the stream {} context (stream.d/rtsp-streams.conf)
 // ---------------------------------------------------------------------------
@@ -1848,7 +1948,8 @@ function discoveredSites(agent) {
   const zones = proxyfile.parseLimitZones(readFileContent(st, limitsPath(agent)) || '');
   const out = [];
   for (const f of files) {
-    if (managedPaths.has(f.path)) continue;
+    // files nginx-manager generates (catch-all, status page, limits, logging) have their own UI
+    if (managedPaths.has(f.path) || /\/00-nginx-manager-[^/]*\.conf$/.test(f.path)) continue;
     const content = readFileContent(st, f.path);
     let sites;
     try { sites = proxyfile.findSites(content).map(proxyfile.publicSite); }

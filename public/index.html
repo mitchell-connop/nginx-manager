@@ -474,6 +474,11 @@
           <div class="sites-grid" id="sites-grid"></div>
 
           <div class="section-header" style="margin-top:26px">
+            <span class="section-title">Unknown hosts</span>
+          </div>
+          <div class="rl-setup" id="ds-card"></div>
+
+          <div class="section-header" style="margin-top:26px">
             <span class="section-title">Forward proxies <span class="badge badge-info" id="fp-req" style="margin-left:6px;text-transform:none;letter-spacing:0"></span></span>
             <button class="op-only btn-primary btn-sm" id="fp-add" onclick="openFwdModal()">＋ Add Forward Proxy</button>
           </div>
@@ -1260,12 +1265,50 @@
     <div class="log-subtabs" id="set-tabs">
       <button class="log-subtab active" data-st="account">My account</button>
       <button class="log-subtab admin-only" data-st="users">Users</button>
+      <button class="log-subtab admin-only" data-st="signin">Sign-in</button>
       <button class="log-subtab admin-only" data-st="alerts">Alerts</button>
       <button class="log-subtab admin-only" data-st="audit">Audit log</button>
       <button class="log-subtab admin-only" data-st="healthdef">Health checks</button>
     </div>
     <div id="set-body" style="min-height:240px"></div>
     <div class="modal-actions"><button class="btn-secondary" onclick="document.getElementById('settings-modal').classList.remove('open')">Close</button></div>
+  </div>
+</div>
+
+<!-- ── UNKNOWN HOSTS (default_server) MODAL ── -->
+<div class="modal-backdrop" id="ds-modal">
+  <div class="modal modal-wide">
+    <h3>🚧 Requests for unknown hosts</h3>
+    <p style="font-size:.84rem;color:var(--text-dim);margin:-6px 0 12px">
+      Without a catch-all, nginx answers a request whose Host matches no site (a scanner hitting the IP, a stale DNS name) with the
+      <em>first</em> site on that port. This adds a <code>default_server</code> for every port your sites listen on, in <span class="mono" id="ds-file"></span>.
+    </p>
+    <div class="form-group"><label>What to do</label>
+      <select id="ds-action" onchange="dsUi();dsPreview()">
+        <option value="drop">Drop — close the connection (444), refuse the TLS handshake (recommended)</option>
+        <option value="status">Return a status code</option>
+        <option value="redirect">Redirect to a URL</option>
+      </select></div>
+    <div class="form-row" id="ds-status-row" style="display:none">
+      <div class="form-group"><label>Status code</label><input type="number" id="ds-status" value="404" min="200" max="599" oninput="dsPreview()"></div></div>
+    <div id="ds-redirect-row" style="display:none">
+      <div class="form-row">
+        <div class="form-group"><label>Redirect to</label><input type="text" id="ds-url" placeholder="https://www.example.com" oninput="dsPreview()"></div>
+        <div class="form-group"><label>Code</label><select id="ds-code" onchange="dsPreview()"><option value="302">302 (temporary)</option><option value="301">301 (permanent)</option><option value="307">307</option><option value="308">308</option></select></div>
+      </div>
+      <div class="toggle-group"><label for="ds-keep">Keep the requested path</label><label class="toggle"><input type="checkbox" id="ds-keep" onchange="dsPreview()"><span class="toggle-slider"></span></label></div>
+    </div>
+    <div class="form-group" id="ds-cert-row" style="display:none"><label>HTTPS certificate</label>
+      <select id="ds-cert" onchange="dsPreview()"></select>
+      <div class="form-hint">Needed to answer HTTPS at all. Visitors using an unknown name will still see a certificate warning first. Without one, HTTPS requests are refused at the handshake.</div></div>
+    <div style="margin-top:8px">
+      <div style="font-size:.78rem;color:var(--text-dim);text-transform:uppercase;letter-spacing:.8px;margin-bottom:6px">Change</div>
+      <pre class="preview-pane" id="ds-preview" style="white-space:pre;overflow:auto;max-height:260px"></pre></div>
+    <div class="modal-actions">
+      <button class="btn-secondary" onclick="document.getElementById('ds-modal').classList.remove('open')">Cancel</button>
+      <button class="btn-primary" onclick="dsSave(false)">💾 Save</button>
+      <button class="btn-success" onclick="dsSave(true)">📤 Save &amp; Apply</button>
+    </div>
   </div>
 </div>
 
@@ -1365,7 +1408,7 @@ function initSocket() {
     if (mc) { mc.log = [...(mc.log || []), line].slice(-50); const el = document.getElementById(`mclog-${cssId(id)}`); if (el) { el.textContent = mc.log.join('\n'); el.scrollTop = el.scrollHeight; } }
   });
   S.socket.on('files', debounce(({ agentId } = {}) => {
-    if (agentId === S.currentAgentId) { loadConfigs(); loadCerts(); loadSites(); loadForwardProxies(); loadStreams(); }
+    if (agentId === S.currentAgentId) { loadConfigs(); loadCerts(); loadSites(); loadForwardProxies(); loadStreams(); loadDefaultServer(); }
   }, 300));
 }
 
@@ -1592,7 +1635,7 @@ async function selectAgent(id) {
   S.uv.data = null; S.uv.scope = 'server';
   switchTab('builder');
   loadCves();
-  await Promise.all([loadSites(), loadCerts(), loadConfigs(), loadForwardProxies(), loadStreams()]);
+  await Promise.all([loadSites(), loadCerts(), loadConfigs(), loadForwardProxies(), loadStreams(), loadDefaultServer()]);
 }
 
 function currentAgent() { return S.agents.find(a => a.id === S.currentAgentId); }
@@ -3292,6 +3335,182 @@ function renderKeepalived() {
 
 
 
+
+// ─── UNKNOWN HOSTS (default_server) ───────────────────
+S.ds = null;
+async function loadDefaultServer() {
+  const id = S.currentAgentId; if (!id) return;
+  const d = await apiFetch(`/api/agents/${id}/default-server`);
+  if (!d || d.error || id !== S.currentAgentId) return;
+  S.ds = d;
+  const s = d.settings;
+  const what = !s ? null : s.action === 'drop' ? 'dropped (HTTP 444, TLS handshake refused)'
+    : s.action === 'status' ? `answered with ${s.status}` : `redirected to ${s.redirectUrl}`;
+  const pend = d.fileStatus && d.fileStatus !== 'live' ? ' <span class="badge badge-warn">unapplied</span>' : '';
+  const conf = d.conflicts.length ? ` <strong style="color:var(--warn)">Already has a default_server: ${d.conflicts.map(c => `${esc(c.key)} (${esc(c.file.split('/').pop())})`).join(', ')} — left alone.</strong>` : '';
+  document.getElementById('ds-card').innerHTML = `<span class="grow">${s
+      ? `🟢 Requests for unknown hosts are <strong>${esc(what)}</strong> on ${d.listeners.map(l => esc(l.key)).join(', ')}.${pend}`
+      : `⚠ <strong>Not set.</strong> A request for a host no site serves (or for the bare IP) is answered by the first site on that port${d.listeners.length ? ` (${d.listeners.map(l => esc(l.key)).join(', ')})` : ''}.`}${conf}</span>
+    <button class="btn-${s ? 'secondary' : 'primary'} btn-sm op-only" onclick="openDsModal()">${s ? 'Change' : 'Set up'}</button>
+    ${s ? '<button class="btn-secondary btn-sm op-only" onclick="dsRemove()">Remove</button>' : ''}`;
+}
+function openDsModal() {
+  const s = S.ds.settings || { action: 'drop' };
+  document.getElementById('ds-file').textContent = S.ds.path;
+  document.getElementById('ds-action').value = s.action;
+  document.getElementById('ds-status').value = s.status || 404;
+  document.getElementById('ds-url').value = s.redirectUrl || '';
+  document.getElementById('ds-code').value = String(s.redirectCode || 302);
+  document.getElementById('ds-keep').checked = !!s.keepPath;
+  const certs = S.certs.filter(c => c.remoteCertPath && c.remoteKeyPath);
+  document.getElementById('ds-cert').innerHTML = '<option value="">No certificate — refuse HTTPS</option>' +
+    certs.map(c => `<option value="${esc(c.remoteCertPath)}|${esc(c.remoteKeyPath)}" ${c.remoteCertPath === s.certFile ? 'selected' : ''}>${esc(c.label)} — ${esc(c.remoteCertPath)}</option>`).join('');
+  dsUi();
+  document.getElementById('ds-modal').classList.add('open');
+  dsPreview(0);
+}
+function dsUi() {
+  const a = document.getElementById('ds-action').value;
+  document.getElementById('ds-status-row').style.display = a === 'status' ? '' : 'none';
+  document.getElementById('ds-redirect-row').style.display = a === 'redirect' ? '' : 'none';
+  document.getElementById('ds-cert-row').style.display = a === 'drop' || !S.ds.listeners.some(l => l.ssl) ? 'none' : '';
+}
+function dsBody(enabled = true) {
+  const [certFile, keyFile] = (document.getElementById('ds-cert').value || '|').split('|');
+  return { enabled, settings: { action: document.getElementById('ds-action').value, status: document.getElementById('ds-status').value,
+    redirectUrl: document.getElementById('ds-url').value.trim(), redirectCode: document.getElementById('ds-code').value,
+    keepPath: document.getElementById('ds-keep').checked, certFile, keyFile } };
+}
+let _dsTimer = null;
+function dsPreview(delay = 250) {
+  clearTimeout(_dsTimer);
+  _dsTimer = setTimeout(async () => {
+    const r = await apiFetch(`/api/agents/${S.currentAgentId}/default-server/preview`, { method: 'POST', body: dsBody() });
+    const pre = document.getElementById('ds-preview');
+    if (!r || r.error) { pre.innerHTML = `<span style="color:var(--warn)">⚠ ${esc(r?.error || 'preview unavailable')}</span>`; return; }
+    pre.innerHTML = colorDiff(r.diff || '');
+  }, delay);
+}
+async function dsSave(apply) {
+  const r = await apiFetch(`/api/agents/${S.currentAgentId}/default-server`, { method: 'PUT', body: dsBody() });
+  if (!r?.ok) { toast(`❌ ${r?.error || 'failed'}`, 'error'); return; }
+  document.getElementById('ds-modal').classList.remove('open');
+  await Promise.all([loadDefaultServer(), loadConfigs(), loadAgents()]);
+  if (apply) doApply('Unknown-host catch-all'); else toast('Saved — click Apply to push', 'success');
+}
+async function dsRemove() {
+  if (!confirm('Remove the catch-all? Unknown hosts will reach the first site on each port again.')) return;
+  const r = await apiFetch(`/api/agents/${S.currentAgentId}/default-server`, { method: 'PUT', body: { enabled: false } });
+  if (!r?.ok) { toast(`❌ ${r?.error || 'failed'}`, 'error'); return; }
+  await Promise.all([loadDefaultServer(), loadConfigs(), loadAgents()]);
+  toast('Removal staged — click Apply to push', 'info');
+}
+
+// ─── SETTINGS: directory sign-in (LDAP / RADIUS) ──────
+const LDAP_PRESETS = {
+  ad: { userFilter: '(sAMAccountName={{username}})', userTemplate: '{{username}}@example.com', nested: true },
+  openldap: { userFilter: '(uid={{username}})', userTemplate: 'uid={{username}},ou=people,dc=example,dc=com', nested: false },
+};
+function renderSignin(a) {
+  const el = document.getElementById('set-body');
+  if (!a || a.error) { el.textContent = a?.error || 'failed'; return; }
+  S.set.auth = a;
+  const L = a.ldap, R = a.radius;
+  const roleSel = (id, v) => `<select id="${id}"><option value="" ${!v ? 'selected' : ''}>refuse sign-in</option>${['viewer', 'operator', 'admin'].map(r => `<option ${v === r ? 'selected' : ''}>${r}</option>`).join('')}</select>`;
+  el.innerHTML = `
+    <p style="font-size:.84rem;color:var(--text-dim);margin-bottom:12px">Lets directory accounts sign in. The built-in <code>admin</code> and local users always work and take precedence;
+      a directory user's role comes from their groups (LDAP) or a reply attribute (RADIUS) at every sign-in.</p>
+    <div class="uv-card"><h4>LDAP / Active Directory</h4>
+      <div class="toggle-group"><label for="au-l-on">Enabled</label><label class="toggle"><input type="checkbox" id="au-l-on" ${L.enabled ? 'checked' : ''}><span class="toggle-slider"></span></label></div>
+      <div class="form-row"><div class="form-group"><label>Server URL</label><input type="text" id="au-l-url" value="${esc(L.url)}" placeholder="ldaps://dc01.example.com:636"></div>
+        <div class="form-group"><label>Base DN</label><input type="text" id="au-l-base" value="${esc(L.baseDn)}" placeholder="DC=example,DC=com"></div></div>
+      <div class="form-row-3">
+        <div class="toggle-group"><label for="au-l-stls">StartTLS (for ldap://)</label><label class="toggle"><input type="checkbox" id="au-l-stls" ${L.starttls ? 'checked' : ''}><span class="toggle-slider"></span></label></div>
+        <div class="toggle-group"><label for="au-l-verify">Verify the server certificate</label><label class="toggle"><input type="checkbox" id="au-l-verify" ${L.verifyTls ? 'checked' : ''}><span class="toggle-slider"></span></label></div>
+        <div class="form-group"><label>Directory type</label><select id="au-l-preset" onchange="authPreset(this.value)"><option value="">—</option><option value="ad">Active Directory</option><option value="openldap">OpenLDAP / FreeIPA</option></select></div></div>
+      <div class="form-group"><label>CA certificate (PEM, optional — for an internal CA)</label><textarea id="au-l-ca" rows="2" style="font-family:var(--mono);font-size:.74rem" placeholder="-----BEGIN CERTIFICATE-----">${esc(L.caPem)}</textarea></div>
+      <div class="form-group"><label>How users are found</label><select id="au-l-mode" onchange="authModeUi()">
+        <option value="search" ${L.mode === 'search' ? 'selected' : ''}>Service account searches for the user, then their password is checked</option>
+        <option value="direct" ${L.mode === 'direct' ? 'selected' : ''}>Bind directly as the user (no service account)</option></select></div>
+      <div class="form-row" id="au-l-svc"><div class="form-group"><label>Service account (bind DN / UPN)</label><input type="text" id="au-l-binddn" value="${esc(L.bindDn)}" placeholder="svc-nginx-manager@example.com"></div>
+        <div class="form-group"><label>Service account password</label><input type="password" id="au-l-bindpw" placeholder="${L.bindPasswordSet ? '(unchanged — stored)' : ''}" autocomplete="new-password"></div></div>
+      <div class="form-row"><div class="form-group"><label>User filter</label><input type="text" id="au-l-filter" value="${esc(L.userFilter)}"></div>
+        <div class="form-group" id="au-l-tpl-wrap"><label>Bind as</label><input type="text" id="au-l-tpl" value="${esc(L.userTemplate)}"></div></div>
+      <div style="font-size:.78rem;color:var(--text-dim);text-transform:uppercase;letter-spacing:.8px;margin:6px 0 8px">Groups → role (full DN)</div>
+      ${['admin', 'operator', 'viewer'].map(r => `<div class="form-group"><label>${r}</label><input type="text" id="au-l-g-${r}" value="${esc(L.groups[r])}" placeholder="CN=nginx-manager-${r}s,OU=Groups,DC=example,DC=com"></div>`).join('')}
+      <div class="form-row"><div class="toggle-group"><label for="au-l-nested">Include nested groups (AD)</label><label class="toggle"><input type="checkbox" id="au-l-nested" ${L.nested ? 'checked' : ''}><span class="toggle-slider"></span></label></div>
+        <div class="form-group"><label>Users in none of these groups</label>${roleSel('au-l-def', L.defaultRole)}</div></div>
+      <div class="form-hint" id="au-l-warn"></div></div>
+    <div class="uv-card"><h4>RADIUS</h4>
+      <div class="toggle-group"><label for="au-r-on">Enabled</label><label class="toggle"><input type="checkbox" id="au-r-on" ${R.enabled ? 'checked' : ''}><span class="toggle-slider"></span></label></div>
+      <div class="form-row-3"><div class="form-group"><label>Server</label><input type="text" id="au-r-host" value="${esc(R.host)}" placeholder="192.0.2.10"></div>
+        <div class="form-group"><label>Port</label><input type="number" id="au-r-port" value="${R.port}"></div>
+        <div class="form-group"><label>Shared secret</label><input type="password" id="au-r-secret" placeholder="${R.secretSet ? '(unchanged — stored)' : ''}" autocomplete="new-password"></div>
+        <div class="form-group"><label>Timeout (s)</label><input type="number" id="au-r-timeout" value="${R.timeoutSec}"></div>
+        <div class="form-group"><label>Retries</label><input type="number" id="au-r-retries" value="${R.retries}"></div>
+        <div class="form-group"><label>NAS-Identifier</label><input type="text" id="au-r-nas" value="${esc(R.nasIdentifier)}"></div></div>
+      <div class="form-row"><div class="form-group"><label>Role comes from the reply attribute</label><select id="au-r-attr">${['Class', 'Filter-Id'].map(x => `<option ${R.roleAttribute === x ? 'selected' : ''}>${x}</option>`).join('')}</select></div>
+        <div class="form-group"><label>No matching value</label>${roleSel('au-r-def', R.defaultRole)}</div></div>
+      <div class="form-row-3">${['admin', 'operator', 'viewer'].map(r => `<div class="form-group"><label>value for ${r}</label><input type="text" id="au-r-v-${r}" value="${esc(R.roles[r])}"></div>`).join('')}</div>
+      <div class="form-hint">PAP with Message-Authenticator (works with NPS, FreeRADIUS, most MFA proxies that accept PAP). Challenge/response MFA prompts aren't supported.</div></div>
+    <div class="form-group" style="max-width:50%"><label>Try in this order</label><select id="au-order"><option value="ldap,radius" ${a.order[0] !== 'radius' ? 'selected' : ''}>LDAP, then RADIUS</option><option value="radius,ldap" ${a.order[0] === 'radius' ? 'selected' : ''}>RADIUS, then LDAP</option></select></div>
+    <div style="display:flex;justify-content:flex-end"><button class="btn-primary btn-sm" onclick="authSave()">💾 Save</button></div>
+    <div class="uv-card" style="margin-top:12px"><h4>Test a sign-in</h4><div class="sub">Uses the saved settings; no session is created.</div>
+      <div class="form-row-3"><div class="form-group"><label>Username</label><input type="text" id="au-t-user" autocomplete="off" autocapitalize="none"></div>
+        <div class="form-group"><label>Password</label><input type="password" id="au-t-pass" autocomplete="new-password"></div>
+        <div class="form-group"><label>Provider</label><select id="au-t-src"><option value="">in order</option><option value="ldap">LDAP</option><option value="radius">RADIUS</option></select></div></div>
+      <button class="btn-secondary btn-sm" onclick="authTest()">▶ Test</button>
+      <pre class="preview-pane" id="au-t-out" style="display:none;white-space:pre-wrap"></pre></div>`;
+  authModeUi();
+  ['au-l-url', 'au-l-stls', 'au-l-verify'].forEach(id => document.getElementById(id).addEventListener('input', authWarn));
+  authWarn();
+}
+function authPreset(v) {
+  const p = LDAP_PRESETS[v]; if (!p) return;
+  document.getElementById('au-l-filter').value = p.userFilter;
+  document.getElementById('au-l-tpl').value = p.userTemplate;
+  document.getElementById('au-l-nested').checked = p.nested;
+}
+function authModeUi() {
+  const direct = document.getElementById('au-l-mode').value === 'direct';
+  document.getElementById('au-l-svc').style.display = direct ? 'none' : '';
+  document.getElementById('au-l-tpl-wrap').style.display = direct ? '' : 'none';
+}
+function authWarn() {
+  const url = document.getElementById('au-l-url').value, stls = document.getElementById('au-l-stls').checked, verify = document.getElementById('au-l-verify').checked;
+  const w = [];
+  if (url.startsWith('ldap:') && !stls) w.push('⚠ ldap:// without StartTLS sends passwords in clear text — use ldaps:// or StartTLS.');
+  if (!verify) w.push('⚠ Certificate verification is off: anyone able to intercept traffic could impersonate the directory. Paste your internal CA above instead.');
+  document.getElementById('au-l-warn').innerHTML = w.map(x => `<div style="color:var(--warn)">${esc(x)}</div>`).join('');
+}
+function authBody() {
+  const v = id => document.getElementById(id).value, c = id => document.getElementById(id).checked;
+  return {
+    order: v('au-order').split(','),
+    ldap: { enabled: c('au-l-on'), url: v('au-l-url').trim(), starttls: c('au-l-stls'), verifyTls: c('au-l-verify'), caPem: v('au-l-ca').trim(),
+      mode: v('au-l-mode'), bindDn: v('au-l-binddn').trim(), bindPassword: v('au-l-bindpw'), baseDn: v('au-l-base').trim(),
+      userFilter: v('au-l-filter').trim(), userTemplate: v('au-l-tpl').trim(), nested: c('au-l-nested'),
+      groups: { admin: v('au-l-g-admin'), operator: v('au-l-g-operator'), viewer: v('au-l-g-viewer') }, defaultRole: v('au-l-def') },
+    radius: { enabled: c('au-r-on'), host: v('au-r-host').trim(), port: v('au-r-port'), secret: v('au-r-secret'), timeoutSec: v('au-r-timeout'),
+      retries: v('au-r-retries'), nasIdentifier: v('au-r-nas'), roleAttribute: v('au-r-attr'),
+      roles: { admin: v('au-r-v-admin'), operator: v('au-r-v-operator'), viewer: v('au-r-v-viewer') }, defaultRole: v('au-r-def') },
+  };
+}
+async function authSave() {
+  const r = await apiFetch('/api/auth-settings', { method: 'PUT', body: authBody() });
+  if (!r || r.error) { toast(`❌ ${r?.error || 'failed'}`, 'error'); return; }
+  toast('Sign-in settings saved', 'success');
+  renderSignin(r);
+}
+async function authTest() {
+  const out = document.getElementById('au-t-out');
+  out.style.display = ''; out.textContent = 'Testing…';
+  const r = await apiFetch('/api/auth-settings/test', { method: 'POST', body: { username: document.getElementById('au-t-user').value, password: document.getElementById('au-t-pass').value, source: document.getElementById('au-t-src').value } });
+  if (!r) { out.textContent = 'request failed'; return; }
+  out.textContent = (r.ok ? `✅ Signed in via ${r.source.toUpperCase()} as ${r.role}` : `❌ ${r.reason}`) + '\n\n' +
+    r.tried.map(t => `[${t.source}] ${t.ok ? `ok → ${t.role}` : `failed: ${t.reason}`}${t.dn ? `\n  dn: ${t.dn}` : ''}${t.groups && t.groups.length ? `\n  groups: ${t.groups.join('\n          ')}` : ''}${t.trace ? `\n  ${t.trace.join('\n  ')}` : ''}`).join('\n\n');
+}
+
 // ─── HEALTH (backend checks from the data plane) ──────
 S.hl = null;
 async function loadHealth() {
@@ -3530,10 +3749,10 @@ async function renderSettings() {
   } else if (t === 'users') {
     const list = await apiFetch('/api/users') || [];
     el.innerHTML = `<table class="cve-table"><thead><tr><th>User</th><th>Role</th><th>Last sign-in</th><th></th></tr></thead><tbody>${list.map(u => `
-      <tr><td><strong>${esc(u.username)}</strong>${u.builtin ? ' <span class="badge badge-info">built-in</span>' : ''}</td>
-        <td>${u.builtin ? 'admin' : `<select onchange="userRole('${esc(u.username)}',this.value)" ${u.username === S.me.username ? 'disabled' : ''}>${['viewer', 'operator', 'admin'].map(r => `<option ${r === u.role ? 'selected' : ''}>${r}</option>`).join('')}</select>`}</td>
+      <tr><td><strong>${esc(u.username)}</strong>${u.builtin ? ' <span class="badge badge-info">built-in</span>' : ''}${u.external ? ` <span class="badge badge-purple">${esc(u.source.toUpperCase())}</span>${u.displayName ? ` <span style="font-size:.76rem;color:var(--text-dim)">${esc(u.displayName)}</span>` : ''}` : ''}</td>
+        <td>${u.external ? `${esc(u.role)} <span style="font-size:.72rem;color:var(--text-dim)">(from directory)</span>` : u.builtin ? 'admin' : `<select onchange="userRole('${esc(u.username)}',this.value)" ${u.username === S.me.username ? 'disabled' : ''}>${['viewer', 'operator', 'admin'].map(r => `<option ${r === u.role ? 'selected' : ''}>${r}</option>`).join('')}</select>`}</td>
         <td style="font-size:.78rem;color:var(--text-dim)">${u.lastLogin ? esc(formatDate(u.lastLogin)) : u.builtin ? '—' : 'never'}</td>
-        <td style="white-space:nowrap">${u.builtin ? '' : `<button class="btn-secondary btn-xs" onclick="userReset('${esc(u.username)}')">Reset password</button>
+        <td style="white-space:nowrap">${u.builtin || u.external ? '' : `<button class="btn-secondary btn-xs" onclick="userReset('${esc(u.username)}')">Reset password</button>
           ${u.username === S.me.username ? '' : `<button class="btn-danger btn-xs" onclick="userRemove('${esc(u.username)}')">Remove</button>`}`}</td></tr>`).join('')}</tbody></table>
       <div style="border-top:1px solid var(--border);margin-top:14px;padding-top:12px">
         <div class="form-row-3"><div class="form-group"><label>Username</label><input type="text" id="nu-name" autocomplete="off" autocapitalize="none"></div>
@@ -3541,6 +3760,8 @@ async function renderSettings() {
           <div class="form-group"><label>Password (10+)</label><input type="password" id="nu-pass" autocomplete="new-password"></div></div>
         <button class="btn-primary btn-sm" onclick="userAdd()">＋ Add user</button>
         <div class="form-hint" style="margin-top:8px">Viewers can see everything except private keys and password files. Operators can edit, apply, roll back and sync. Admins also manage users, alerts, branding and server enrolment.</div></div>`;
+  } else if (t === 'signin') {
+    renderSignin(await apiFetch('/api/auth-settings'));
   } else if (t === 'audit') {
     el.innerHTML = `<div class="rl-toolbar"><input id="au-q" placeholder="Search user, action, server…" oninput="auditLoadDebounced()" /></div><div id="au-list" style="max-height:440px;overflow:auto"></div>`;
     auditLoad();
