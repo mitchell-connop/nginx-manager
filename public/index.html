@@ -3408,7 +3408,7 @@ async function dsRemove() {
 
 // ─── SETTINGS: directory sign-in (LDAP / RADIUS) ──────
 const LDAP_PRESETS = {
-  ad: { userFilter: '(sAMAccountName={{username}})', userTemplate: '{{username}}@example.com', nested: true },
+  ad: { userFilter: '(|(sAMAccountName={{username}})(userPrincipalName={{upn}}))', userTemplate: '{{username}}@example.com', nested: true },
   openldap: { userFilter: '(uid={{username}})', userTemplate: 'uid={{username}},ou=people,dc=example,dc=com', nested: false },
 };
 function renderSignin(a) {
@@ -3436,7 +3436,8 @@ function renderSignin(a) {
         <option value="direct" ${L.mode === 'direct' ? 'selected' : ''}>Bind directly as the user (no service account)</option></select></div>
       <div class="form-row" id="au-l-svc"><div class="form-group"><label>Service account (bind DN / UPN)</label><input type="text" id="au-l-binddn" value="${esc(L.bindDn)}" placeholder="svc-nginx-manager@example.com"></div>
         <div class="form-group"><label>Service account password</label><input type="password" id="au-l-bindpw" placeholder="${L.bindPasswordSet ? '(unchanged — stored)' : ''}" autocomplete="new-password"></div></div>
-      <div class="form-row"><div class="form-group"><label>User filter</label><input type="text" id="au-l-filter" value="${esc(L.userFilter)}"></div>
+      <div class="form-row"><div class="form-group"><label>User filter</label><input type="text" id="au-l-filter" value="${esc(L.userFilter)}">
+          <div class="form-hint">Users may type <code>user</code>, <code>DOMAIN\\user</code> or <code>user@domain</code>: <code>{{username}}</code> is the bare name, <code>{{upn}}</code> the UPN if one was typed.</div></div>
         <div class="form-group" id="au-l-tpl-wrap"><label>Bind as</label><input type="text" id="au-l-tpl" value="${esc(L.userTemplate)}"></div></div>
       <div style="font-size:.78rem;color:var(--text-dim);text-transform:uppercase;letter-spacing:.8px;margin:6px 0 8px">Groups → role (full DN)</div>
       ${['admin', 'operator', 'viewer'].map(r => `<div class="form-group"><label>${r}</label><input type="text" id="au-l-g-${r}" value="${esc(L.groups[r])}" placeholder="CN=nginx-manager-${r}s,OU=Groups,DC=example,DC=com"></div>`).join('')}

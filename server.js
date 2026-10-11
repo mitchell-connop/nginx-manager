@@ -411,8 +411,12 @@ app.post('/api/login', async (req, res) => {
   if (!user && !users.exists(username) && extAuth.enabled()) {
     ext = await extAuth.authenticate(username, password).catch(e => ({ ok: false, reason: e.message }));
     if (ext.ok) {
-      user = { username, role: ext.role, source: ext.source };
-      users.recordExternal({ username, role: ext.role, source: ext.source, displayName: ext.displayName });
+      const canonical = ext.username || username;
+      if (users.exists(canonical)) ext = { ok: false, reason: `a local account named ${canonical} exists — sign in with it` };
+      else {
+        user = { username: canonical, role: ext.role, source: ext.source };
+        users.recordExternal({ username: canonical, role: ext.role, source: ext.source, displayName: ext.displayName });
+      }
     }
   }
   if (!user) {

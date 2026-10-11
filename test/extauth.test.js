@@ -117,3 +117,26 @@ test('service-account bind failure is reported as such, not as a bad user passwo
   const r = await a.authenticate('al', 'pw');
   assert.match(r.reason, /^service account bind failed/);
 });
+
+test('login name forms: bare, DOMAIN\\user, user@upn → one canonical user', async () => {
+  assert.deepStrictEqual(ea.parseLogin('mjc.local\\Mitch.Connop'), { name: 'Mitch.Connop', upn: null, domain: 'mjc.local' });
+  assert.deepStrictEqual(ea.parseLogin('MJC\\al'), { name: 'al', upn: null, domain: 'MJC' });
+  assert.deepStrictEqual(ea.parseLogin('al@example.com'), { name: 'al', upn: 'al@example.com', domain: 'example.com' });
+  const filters = [];
+  class C {
+    async bind(dn, pw) { if (dn === 'svc' && pw === 'svcpw') return; if (dn === 'CN=Al,DC=x' && pw === 'alpw') return; if (dn === 'al@example.com' && pw === 'alpw') return; throw Object.assign(new Error('data 52e'), { code: 49 }); }
+    async search(base, o) { filters.push(o.filter); return /sAMAccountName=al\)|userPrincipalName=al@example\.com/i.test(o.filter) ? { searchEntries: [{ dn: 'CN=Al,DC=x', sAMAccountName: 'Al', memberOf: ['CN=Admins,DC=x'] }] } : { searchEntries: [] }; }
+    async unbind() {}
+  }
+  const a = new ea.ExternalAuth({ ldapClient: C });
+  a.settings.ldap = { ...a.settings.ldap, enabled: true, url: 'ldaps://dc', mode: 'search', bindDn: 'svc', bindPassword: 'svcpw', baseDn: 'DC=x',
+    groups: { admin: 'CN=Admins,DC=x', operator: '', viewer: '' }, nested: false };
+  for (const u of ['al', 'X\\al', 'x.example.com\\AL', 'al@example.com']) {
+    const r = await a.authenticate(u, 'alpw');
+    assert.strictEqual(r.ok, true, u); assert.strictEqual(r.username, 'al', u); assert.strictEqual(r.role, 'admin', u);
+  }
+  assert.ok(filters.some(f => f.includes('(userPrincipalName=al@example.com)')));
+  // direct mode: a typed UPN binds as itself
+  a.settings.ldap = { ...a.settings.ldap, mode: 'direct', userTemplate: 'CN={{username}},DC=nope' };
+  assert.strictEqual((await a.authenticate('al@example.com', 'alpw')).ok, true);
+});
