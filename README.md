@@ -6,7 +6,7 @@ Built for ConnopNetworking homelab infrastructure; usable anywhere you run open-
 
 - [Features](#features)
 - [Architecture](#architecture)
-- [Installation](#installation) — manager, adding nginx servers, network ports
+- [Installation](#installation) — manager, adding nginx servers, network ports, firewall rules
 - [Configuration (.env)](#configuration-env)
 - [Setup guides](#setup-guides) — how to configure each feature
 - [Notes](#notes) · [Limitations](#limitations) · [Development](#development)
@@ -128,6 +128,48 @@ Lost the token? **🔑 Agent Setup → New Token** issues a new one (the old one
 | nginx server | itself | 127.0.0.1:8099/tcp | Health helper ↔ `stub_status` (loopback only) |
 
 The manager never connects to the nginx servers or their backends, so it can live in a separate management VLAN as long as the servers can reach it on 8443/tcp and 5514/udp.
+
+### Firewall rules (manager in a different network / VLAN)
+
+Example: management VLAN `10.0.10.0/24` with the manager at `10.0.10.5`, nginx servers in a DMZ `10.0.20.0/24` (VIP `10.0.20.50`), admins on `10.0.30.0/24`. Substitute your own ranges.
+
+**On the router / inter-VLAN firewall** (stateful — return traffic is allowed automatically):
+
+| # | Action | Source | Destination | Protocol / port | Purpose |
+|---|---|---|---|---|---|
+| 1 | allow | nginx servers `10.0.20.0/24` | manager `10.0.10.5` | TCP 8443 | Agent → management plane (required) |
+| 2 | allow | nginx servers `10.0.20.0/24` | manager `10.0.10.5` | UDP 5514 | Request log, keepalived log + VIP state, health results |
+| 3 | allow | admins `10.0.30.0/24` | manager `10.0.10.5` | TCP 3000 (or 443 if proxied) | Web UI |
+| 4 | allow *(optional)* | manager `10.0.10.5` | VIP `10.0.20.50` | TCP 443 (the group's VIP port) | VIP reachability on the badge |
+| 5 | allow *(if used)* | manager | domain controllers / RADIUS | TCP 636 (or 389), UDP 1812 | Directory sign-in |
+| 6 | allow | manager | internet | TCP 443 (+ SMTP 587/465 to your mail relay) | ACME + DNS APIs, CVE feeds, webhooks, email |
+| — | **not needed** | manager | nginx servers | *anything* | The manager never connects to the servers (no SSH, no agent port) |
+| — | **not needed** | manager | backends | *anything* | Health checks run on the nginx servers, which already reach their backends |
+
+Rules 1–2 are the only ones the nginx servers need. Rule 2 is one-way UDP: no reply is sent, so a stateful firewall needs no return rule. Nothing needs to be opened **towards** the nginx servers for management.
+
+**Don't NAT between the servers and the manager.** The manager identifies each server by the source IP it sees on the gRPC connection and accepts syslog only from those addresses. With SNAT/masquerade every server appears as the same address, so log lines, health results and VIP state can't be told apart (or are dropped). Route the VLANs instead. If the manager itself is reached through a NAT/VIP address, set `LOG_RECEIVER_HOST` (where servers send syslog) and `AGENT_CONNECT_HOST` (where agents connect) to that address.
+
+**On the manager's own host firewall** — e.g. `ufw`:
+
+```bash
+ufw allow from 10.0.20.0/24 to any port 8443 proto tcp
+ufw allow from 10.0.20.0/24 to any port 5514 proto udp
+ufw allow from 10.0.30.0/24 to any port 3000 proto tcp
+```
+
+or `firewalld`:
+
+```bash
+firewall-cmd --permanent --new-zone=nginx-servers
+firewall-cmd --permanent --zone=nginx-servers --add-source=10.0.20.0/24
+firewall-cmd --permanent --zone=nginx-servers --add-port=8443/tcp --add-port=5514/udp
+firewall-cmd --reload
+```
+
+**On the nginx servers' host firewalls:** no inbound rules are needed for nginx-manager (outbound to the manager is allowed by default on Debian/Ubuntu and RHEL). If you filter outbound traffic, allow TCP 8443 and UDP 5514 to the manager. The helper's `stub_status` port (8099) is bound to 127.0.0.1 only and must **not** be opened. keepalived itself still needs VRRP (IP protocol 112) between the pair as usual — unrelated to the manager.
+
+**Checking it:** from an nginx server, `nc -zv 10.0.10.5 8443` should connect; the server turns green in the sidebar once the agent is in. For UDP, enable Connections and make a request through nginx — it should appear in the Log tab within a second. Nothing arriving while the agent is connected means UDP 5514 is blocked or NATed.
 
 ## Configuration (.env)
 
