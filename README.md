@@ -1,71 +1,93 @@
 # Nginx Manager
 
-A self-hosted web GUI for managing nginx servers through **[NGINX Agent](https://github.com/nginx/agent) v3** — edit configs, build sites visually, manage certificates, and push changes that are validated and rolled back automatically.
+A self-hosted web GUI for managing nginx servers through **[NGINX Agent](https://github.com/nginx/agent) v3** — edit configs, build sites visually, manage certificates, watch traffic and backends, and push changes that are validated and rolled back automatically.
 
-Built for ConnopNetworking homelab infrastructure.
+Built for ConnopNetworking homelab infrastructure; usable anywhere you run open-source nginx on Linux.
+
+- [Features](#features)
+- [Architecture](#architecture)
+- [Installation](#installation) — manager, adding nginx servers, network ports
+- [Configuration (.env)](#configuration-env)
+- [Setup guides](#setup-guides) — how to configure each feature
+- [Notes](#notes) · [Limitations](#limitations) · [Development](#development)
 
 ## Features
 
-- 🖥️ **Multi-server** — manage multiple nginx servers from one interface, grouped in the sidebar
-- ➕ **Manual enrolment** — servers are added by hand in the UI; each gets its own agent token. Agents with unknown tokens are rejected.
-- 🔐 **No passwords in the repo or on disk** — no SSH, no host credentials. Agent tokens are stored only as SHA-256 hashes; the admin password as a bcrypt hash.
+**Managing servers and config**
+
+- 🖥️ **Multi-server** — manage many nginx servers from one interface, grouped in the sidebar (e.g. a keepalived pair per group)
+- ➕ **Manual enrolment** — servers are added by hand; each gets its own agent token. Agents with unknown tokens are rejected
+- 🐧 **Debian/Ubuntu and RHEL/Rocky/Alma/Amazon Linux** nginx servers — every install script the manager hands out detects `apt-get` vs `dnf`/`yum`; SELinux-aware
+- 🔐 **No host credentials** — no SSH. Agent tokens are stored only as SHA-256 hashes, passwords as bcrypt hashes
 - 📄 **Config editor** — edit every file nginx references, as reported by the agent
-- 🔀 **Reverse proxies** — add and edit sites from a popup; they live in `conf.d/reverse-proxies.conf` (created if missing), edited in place with a live diff preview
-- 🏗️ **Visual Site Builder** — every server block on the server is listed live; static sites and redirects get their own generated file
-- 🧭 **Forward proxies** — HTTPS (CONNECT) forward proxies with client allowlists, logins and destination allowlists, in `conf.d/forward-proxies.conf` — **requires nginx 1.31.0+** on that server
-- 📹 **RTSP streams** — relay camera RTSP feeds as TCP proxies in nginx's `stream {}` context: one upstream + server per camera (optional fallback such as an NVR, client allowlist required, connect/idle timeouts, TCP keepalive) in `stream.d/rtsp-streams.conf`. The first stream adds a `stream {}` block to `nginx.conf` (with a local `stream-access.log`); sessions also appear in the Log tab's Connections view. Clients must use RTSP over TCP
-- 🔄 **Managed certificates** — certbot runs on the manager (Let's Encrypt by default; ZeroSSL, Google Trust Services, DigiCert, Sectigo or any ACME CA with EAB; or exportable AWS ACM certificates), deploys to every server in the group through the agents, and renews automatically
-- 🔐 **Certificates** — every cert nginx references, live, with SANs, issuer, expiry and which sites use it; upload new cert/key pairs
 - 📤 **Apply** — staged changes are pushed in one go; the agent writes them, runs `nginx -t`, reloads, and **rolls back automatically** if anything fails
-- 🔄 **Live, no scanning** — the Builder, Certificates and Raw Configs tabs are derived from what the agent reports, so hand edits on the server show up within seconds (agent file watcher)
-- 📈 **Usage dashboard** — requests by result (allowed / 4xx / 5xx / denied), data sent, median and p95 response time, top sites, clients, status codes, upstreams and RTSP streams, over 1 h – 30 days, per server or per group. Built from the streamed request log (enable it in Log → Connections); per-minute buckets for 48 h and hourly for 30 days in `data/usage/`
-- 🛡️ **CVE detection** — matches each server's nginx version against the [nginx.org security advisories](https://nginx.org/en/security_advisories.html) and nginx-agent against [OSV.dev](https://osv.dev). Module-specific advisories (HTTP/3, mp4, SSI, map regex…) are checked against the server's config, so a vulnerable version whose module isn't used is shown as such. Shows the version that fixes everything that applies; sources refresh daily (outbound HTTPS from the manager). OS packages aren't covered
-- 🔁 **Group sync & drift detection** — members of a group (e.g. a keepalived pair) are compared continuously; the sidebar flags drift, **Compare & sync** shows which files differ (with diffs) and copies the right version to the others, and **Apply → Whole group** carries one server's edits to every member, one at a time, stopping at the first failure. Files changed separately on another member are flagged as conflicts instead of being overwritten. Per-group ignore patterns for files meant to differ
+- 🔄 **Live, no scanning** — the Builder, Certificates and Raw Configs tabs are derived from what the agent reports, so hand edits on the server show up within seconds
+- 🔁 **Group sync & drift detection** — members of a group are compared continuously; the sidebar flags drift, **Compare & sync** shows the differing files (with diffs) and copies the right version to the others, and **Apply → Whole group** carries one server's edits to every member one at a time, stopping at the first failure. Files changed separately on another member are flagged as conflicts instead of being overwritten
 - 🕘 **Config history & rollback** — a snapshot every time a server's files change (applied here, or edited on the server itself), with who, what and a diff; **Restore** stages any earlier version for review and apply
-- ❤️ **Backend health checks from the data plane** — a small helper on each nginx server (`helper/nm-helper.py`, unprivileged systemd unit, Python stdlib only) probes every upstream/`proxy_pass` backend (TCP or HTTP, per-backend settings) and reads a loopback-only `stub_status`, reporting over the same UDP port as the request log. The manager never needs to reach the backends, so it can sit in a separate control-plane network. Up/down with fall/rise thresholds, 24 h availability, live connections
-- 🔔 **Alerts** — email (SMTP: STARTTLS/TLS/plain) and webhooks (generic JSON, Slack/Mattermost, Discord, ntfy, Teams) for VIP failover, server offline, failed applies, certificate renewal failures and expiry, new CVEs, backends down/recovered, 5xx and denied-request spikes, and group drift — with cool-downs and recovery messages
-- 🛡️ **Per-site protection** in the reverse-proxy popup — rate limiting (`limit_req`, zone per site in `conf.d/00-nginx-manager-limits.conf`), concurrent-connection limits, and SSO via `auth_request` (presets for Authelia, Authentik and oauth2-proxy; Remote-User/Groups/Email/Name passed to the backend)
-- 👥 **Users, roles & audit log** — viewer (read-only, never sees private keys), operator (edit/apply/rollback/sync), admin (users, alerts, branding, enrolment). The built-in `admin` account uses `ADMIN_PASSWORD`; others are bcrypt-hashed in `data/users.json`. Every change through the API, every apply and every login is recorded in `data/audit.log`
-- 🚧 **Unknown hosts** — a managed `default_server` catch-all (`conf.d/00-nginx-manager-default.conf`) for every address:port your sites listen on, so a request for a host no site serves (or for the bare IP) never lands on the first site: drop it (444 + `ssl_reject_handshake`, no certificate needed), return a status, or redirect. Kept in step with your listeners automatically
-- 🔑 **Directory sign-in** — LDAP / Active Directory (service-account search or direct bind, LDAPS or StartTLS, internal CA, nested AD groups) and RADIUS (PAP with Message-Authenticator; role from Class or Filter-Id). Directory groups map to viewer / operator / admin at every sign-in; local accounts and the built-in admin always take precedence. Settings → Sign-in has a step-by-step test
-- 📊 **Status** — agent connection, nginx version and instance health
-- 🎨 **Branding** — your own logo (also the browser tab icon), app name and login text; stored in `data/` so updates keep it
-- 🖥️ **Live log** — Socket.IO real-time operation output (session-authenticated)
-- 📡 **Connections** — live request log per server: client, site, request, status and upstream, with allowed / denied (401/403/407/429/444) / error counts and filters. One click adds a syslog `access_log` (`conf.d/00-nginx-manager-logging.conf`) through the agent; query strings are never logged
-- 💓 **Keepalived log & VIP holder** — keepalived's journal per server (MASTER/BACKUP transitions highlighted), shipped by a small systemd unit whose install script is in the Log tab. The same unit reports every 10 s which addresses each server holds and whether keepalived is running, so the group's VIP badge shows the active server (and split brain, or a member with keepalived stopped) even when the manager is on another subnet. Without it the manager falls back to matching the VIP's MAC in its own ARP table, which only works on the same L2 segment
+
+**Visual Builder**
+
+- 🔀 **Reverse proxies** — add and edit sites from a popup; they live in `conf.d/reverse-proxies.conf`, edited in place with a live diff preview
+- 🛡️ **Per-site protection** — rate limiting (`limit_req`), concurrent-connection limits (`limit_conn`), and SSO via `auth_request` (presets for Authelia, Authentik and oauth2-proxy)
+- 🏗️ **Static sites and redirects** — each gets its own generated file; every other server block is listed live
+- 🧭 **Forward proxies** — HTTPS (CONNECT) forward proxies with client allowlists, logins and destination allowlists — **requires nginx 1.31.0+**
+- 📹 **RTSP streams** — relay camera RTSP feeds as TCP proxies in nginx's `stream {}` context, one upstream + server per camera with optional fallback (e.g. an NVR)
+- 🚧 **Unknown hosts** — a managed `default_server` catch-all so a request for a host no site serves (or for the bare IP) never lands on the first site: drop it, return a status, or redirect
+
+**Certificates**
+
+- 🔄 **Managed certificates** — certbot runs on the manager (Let's Encrypt, ZeroSSL, Google Trust Services, DigiCert, Sectigo or any ACME CA with EAB; or exportable AWS ACM certificates), deploys to every server in the group through the agents, and renews automatically
+- 🔐 **Certificate inventory** — every cert nginx references, live, with SANs, issuer, expiry and which sites use it; upload new cert/key pairs
+
+**Observability**
+
+- 📡 **Connections** — live request log per server: client, site, request, status and upstream, with allowed / denied / error counts and filters. Query strings are never logged
+- 💓 **Keepalived log & VIP holder** — keepalived's journal per server (MASTER/BACKUP transitions highlighted), and which server holds each group's VIP — reported by the servers themselves, so it works when the manager is on another subnet. Split brain and a stopped keepalived are flagged
+- ❤️ **Backend health checks from the data plane** — a small helper on each nginx server probes every upstream / `proxy_pass` backend (TCP or HTTP) and reads a loopback-only `stub_status`. The manager never needs to reach the backends, so it can sit in a separate control-plane network. Up/down with fall/rise thresholds, 24 h availability, live connections
+- 📈 **Usage dashboard** — requests by result (allowed / 4xx / 5xx / denied), data sent, median and p95 response time, top sites, clients, status codes, upstreams and RTSP streams, over 1 h – 30 days, per server or per group
+- 🛡️ **CVE detection** — matches each server's nginx version against the [nginx.org security advisories](https://nginx.org/en/security_advisories.html) and nginx-agent against [OSV.dev](https://osv.dev). Module-specific advisories are checked against the server's config, so a vulnerable version whose module isn't used is shown as such
+- 🔔 **Alerts** — email (SMTP) and webhooks (generic JSON, Slack/Mattermost, Discord, ntfy, Teams) for VIP failover, server offline, failed applies, certificate problems, new CVEs, backends down/recovered, 5xx and denied-request spikes, and group drift
+- 📊 **Status** and 🖥️ **live operation log** (Socket.IO, session-authenticated)
+
+**Access**
+
+- 👥 **Users, roles & audit log** — viewer (read-only, never sees private keys), operator (edit / apply / rollback / sync), admin (users, sign-in, alerts, branding, enrolment). Every change, apply and sign-in is recorded
+- 🔑 **Directory sign-in** — LDAP / Active Directory and RADIUS; directory groups map to roles at every sign-in
+- 🎨 **Branding** — your own logo (also the browser tab icon), app name and login text
 
 ## Architecture
 
 ```
-Browser ── HTTP + Socket.IO ──▶ nginx-manager (Node.js)
-                                  │  gRPC/TLS :8443  (NGINX Agent management-plane protocol, mpi.v1)
-                                  ▲
-               ┌──────────────────┴──────────────────┐
-         nginx-agent (dials in)                nginx-agent (dials in)
-         nginx-lb-01                           nginx-lb-02
+Browser ── HTTPS/HTTP :3000 + Socket.IO ──▶ nginx-manager (Node.js)  ── LDAP/RADIUS, SMTP, webhooks, ACME, CVE feeds ──▶
+                                              ▲               ▲
+                       gRPC/TLS :8443/tcp ────┘               └──── syslog :5514/udp (request log, keepalived, health)
+                                              │               │
+               ┌──────────────────────────────┴───────────────┴──────────┐
+         nginx server A                                           nginx server B
+         nginx + nginx-agent (dials in)                           nginx + nginx-agent
+         [nginx-manager-helper]  [keepalived + forwarder]         [helper]  [keepalived + forwarder]
 ```
 
-The agents connect **out** to the manager — the manager never logs in to the nginx servers.
-Each agent:
+The agents connect **out** to the manager — the manager never logs in to the nginx servers. Each agent:
 
 1. authenticates with its per-server token (`authorization` gRPC metadata, TLS only),
 2. reports its nginx instance and uploads the config files nginx references (inside its `allowed_directories`),
 3. on **Apply**, downloads changed files, runs `nginx -t`, reloads, and reports success — or rolls back and reports the error.
 
+Everything else the servers send (request log, keepalived journal and VIP state, health results) is UDP syslog to the manager. Packets are accepted only from enrolled agents' addresses.
+
 ## Installation
 
 ### Manager
 
-Requirements: Debian 12+/Ubuntu 22.04+ for the manager, Node.js 20+, `openssl`.
-
-Managed nginx servers can run **Debian/Ubuntu or RHEL/Rocky/Alma 8+ (and Amazon Linux)** — the agent, helper and keepalived install scripts detect `apt-get` vs `dnf`/`yum`. On SELinux-enforcing hosts the helper script labels its loopback status port (`8099`) as `http_port_t`; nginx's syslog to the manager is plain UDP and needs no boolean.
+Requirements: **Debian 12+ or Ubuntu 22.04+**, Node.js 20+, `openssl`, `git`. (certbot and its DNS plugins are installed by the installer for managed certificates.)
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/mitchell-connop/nginx-manager/main/install.sh -o install.sh
 sudo bash install.sh
 ```
 
-The installer generates `SESSION_SECRET`, prompts for the admin password and stores it as a bcrypt hash in `/opt/nginx-manager/.env` (mode 600, git-ignored), and installs the systemd service.
+The installer installs Node.js 22 if needed, clones to `/opt/nginx-manager`, generates `SESSION_SECRET`, prompts for the admin password and stores it as a bcrypt hash in `.env` (mode 600, git-ignored), and installs the systemd service.
 
 On first start the manager creates a private CA and a TLS certificate for the agent gRPC listener in `data/tls/` (covering the host's name and IPv4 addresses — see `GRPC_TLS_SANS`).
 
@@ -78,59 +100,216 @@ cp .env.example .env && chmod 600 .env   # set SESSION_SECRET and ADMIN_PASSWORD
 node server.js
 ```
 
+**Upgrading:** `cd /opt/nginx-manager && git pull --ff-only && npm ci --omit=dev && systemctl restart nginx-manager`. A restart signs everyone out (sessions are held in memory).
+
 ### Adding an nginx server
 
-1. In the UI click **＋ Add Server**, give it a name (and optional group).
-2. A one-time **agent token** and a setup script are shown. Run the script as root on the nginx server — it:
-   - installs `nginx-agent` from the nginx.org repo,
+Supported: **Debian / Ubuntu**, **RHEL / Rocky / Alma 8–10**, **Amazon Linux 2 / 2023**, with nginx from the distro or from nginx.org.
+
+1. Click **＋ Add Server**, give it a name and (optionally) a group — servers in the same group are compared for drift and can be applied to together.
+2. A one-time **agent token** and a setup script are shown. Run the script as root on the nginx server. It:
+   - adds the nginx.org `nginx-agent` repository for that distro (apt or dnf/yum) and installs the agent,
    - writes the token to `/etc/nginx-agent/manager.token` (mode 600) and the manager's CA to `/etc/nginx-agent/manager-ca.pem`,
    - writes `/etc/nginx-agent/nginx-agent.conf` pointing at the manager, and restarts the agent.
 3. The server turns green in the sidebar and its config files appear within a few seconds.
 
 Lost the token? **🔑 Agent Setup → New Token** issues a new one (the old one stops working immediately).
 
-Make sure the nginx servers can reach the manager on `GRPC_PORT` (default 8443/tcp), and on `LOG_RECEIVER_PORT`
-(default 5514/udp) if you use the Connections / Keepalived logs or health checks.
+### Network ports
 
-## Configuration
+| From | To | Port | Needed for |
+|---|---|---|---|
+| Browsers | manager | `PORT` (3000/tcp) | Web UI |
+| nginx servers | manager | `GRPC_PORT` (8443/tcp) | Agent connection — always |
+| nginx servers | manager | `LOG_RECEIVER_PORT` (5514/udp) | Connections log, keepalived log + VIP holder, health checks, usage |
+| manager | VIP | the group's VIP port (tcp) | VIP reachability check (optional) |
+| manager | directory | 636/389 tcp, 1812/udp | LDAP / RADIUS sign-in (if used) |
+| manager | internet | 443/tcp | CVE feeds, ACME CAs, DNS APIs, webhooks; SMTP port for email |
+| nginx server | itself | 127.0.0.1:8099/tcp | Health helper ↔ `stub_status` (loopback only) |
 
-Edit `.env` (see `.env.example`):
+The manager never connects to the nginx servers or their backends, so it can live in a separate management VLAN as long as the servers can reach it on 8443/tcp and 5514/udp.
+
+## Configuration (.env)
+
+Edit `.env` (see `.env.example`) and restart the service.
 
 | Variable | Default | Description |
 |---|---|---|
 | `PORT` | `3000` | Web UI port |
 | `SESSION_SECRET` | **(required)** | Session cookie secret — long random string |
-| `ADMIN_PASSWORD` | **(required)** | Login password — a bcrypt hash (recommended) or plain text |
+| `ADMIN_PASSWORD` | **(required)** | Built-in `admin` password — a bcrypt hash (recommended) or plain text |
 | `GRPC_PORT` | `8443` | Port NGINX Agent connects to (gRPC over TLS) |
-| `AGENT_CONNECT_HOST` | browser hostname | Host/IP agents use to reach the manager (used in setup instructions) |
-| `GRPC_TLS_SANS` | hostname + IPv4s | Names/IPs in the generated gRPC certificate, e.g. `DNS:nginx-manager.lan,IP:10.0.0.10` |
-| `GRPC_TLS_CERT` / `GRPC_TLS_KEY` / `GRPC_TLS_CA` | — | Use your own certificate instead |
-| `LOG_RECEIVER_PORT` | `5514` | UDP syslog port for the Log tab's Connections / Keepalived views; `off` disables it. Packets are only accepted from enrolled agents' addresses |
-| `LOG_RECEIVER_HOST` | auto | Address the servers send syslog to (default: the manager's local address on the route to each server) |
-| `COOKIE_SECURE` / `TRUST_PROXY` | — | Set when serving the UI over HTTPS behind a proxy |
+| `AGENT_CONNECT_HOST` | browser hostname | Host/IP agents use to reach the manager (written into setup scripts) — set it when you browse the UI by a name the servers can't resolve |
+| `GRPC_TLS_SANS` | hostname + IPv4s | Names/IPs in the generated gRPC certificate, e.g. `DNS:nginx-manager.lan,IP:10.0.0.10`. The certificate is re-issued automatically on restart when this changes (same CA, so agents keep working) |
+| `GRPC_TLS_CERT` / `GRPC_TLS_KEY` / `GRPC_TLS_CA` | — | Use your own gRPC certificate instead |
+| `GRPC_TLS_SERVER_NAME` | — | Name in your own certificate, if the agents connect by IP |
+| `LOG_RECEIVER_PORT` | `5514` | UDP syslog port; `off` disables the receiver (and Connections, keepalived, health checks, usage) |
+| `LOG_RECEIVER_HOST` | auto | Address the servers send syslog to. Default: the manager's own address on the route to each server. Set it when the manager is behind NAT |
+| `COOKIE_SECURE` | — | `true` when the UI is served over HTTPS (cookies marked Secure) |
+| `TRUST_PROXY` | — | e.g. `1` when behind a reverse proxy, so client IPs (login lockout, audit log) are right |
+| `DATA_DIR` | `./data` | Where all state lives |
+| `CERTBOT_BIN` | `certbot` | certbot executable for managed certificates |
+
+## Setup guides
+
+Everything below is configured in the UI. Changes to nginx files are **staged** — review them and click **Apply** (or **Apply → Whole group**).
+
+### Groups and the keepalived VIP
+
+1. Put both servers of an HA pair in the same group (set when adding a server, or edit it later).
+2. Right-click the group in the sidebar → **🛜 Set VIP…** and enter the virtual IP and a port it serves (e.g. 443).
+3. Install the **keepalived forwarder** on each server (next section) so the manager is told which server holds the VIP.
+
+The badge under the group shows the holder (green), a member with keepalived stopped — no standby (amber), split brain or nobody holding it (red), or that the VIP doesn't answer the manager. Without the forwarder, the manager falls back to matching the VIP's MAC address in its own ARP table, which only works when it is on the same L2 subnet as the servers.
+
+### Keepalived log forwarder
+
+**Log tab → Keepalived → Forwarder setup** shows a script. Run it as root on **every** keepalived server. It installs `nginx-manager-keepalived-log.service` (unprivileged), which:
+
+- streams keepalived's journal to the manager (MASTER/BACKUP transitions are highlighted; the last 200 lines are replayed on restart and de-duplicated), and
+- every 10 s reports the server's IPv4 addresses and whether keepalived is running — this is what names the VIP holder.
+
+Re-run the script if the manager's address changes.
+
+### Connections (request log)
+
+**Log tab → Connections → Enable & apply**, on each server (members of a group are separate). This adds `conf.d/00-nginx-manager-logging.conf` — a JSON `log_format` and an `access_log syslog:` line pointing at the manager — alongside nginx's normal access log. It also feeds the **Usage** tab. Denied = 401/403/407/429/444. Query strings are never logged.
+
+### Backend health checks
+
+1. **Health tab → Helper install script**: run it as root on each nginx server **before** enabling checks. It installs Python 3 if missing, the helper (`/usr/local/lib/nginx-manager/nm-helper.py`) and `nginx-manager-helper.service` (unprivileged, `DynamicUser`). On SELinux hosts it labels port 8099 as `http_port_t` so nginx may listen there.
+2. **Health tab → Enable & apply** (choose **Whole group** for a pair). This stages a loopback-only `stub_status` on 127.0.0.1:8099 and the helper's target list (`nginx-manager/helper.json`), both delivered by the agent.
+3. Backends are found automatically from `upstream` blocks and fixed `proxy_pass` / `grpc_pass` addresses, and kept in step with every apply. Use **Edit check** on a backend to switch it from a TCP connect check to an **HTTP** check (path, expected status such as `200-399`, Host header, TLS) or to disable it.
+4. **⚙ Settings → Health checks** sets interval, timeout, *fall* (failures before down) and *rise* (successes before up) for all servers.
+
+A backend's row also shows how the other group members see it — useful when only one LB can't reach something.
+
+### Alerts
+
+**⚙ Settings → Alerts** (admin):
+
+- **Email (SMTP)** — server, port, security (`starttls` on 587, `tls` on 465, or none), optional username/password, From, and comma-separated To addresses.
+- **Webhooks** — **＋ Add webhook**, name, URL and format:
+  | Format | URL to paste |
+  |---|---|
+  | `json` | any endpoint; receives `{event, severity, title, message, …}` |
+  | `slack` | Slack or Mattermost incoming-webhook URL |
+  | `discord` | Discord channel webhook URL |
+  | `ntfy` | `https://ntfy.sh/<topic>` or your own ntfy server |
+  | `teams` | Teams incoming webhook / Workflows URL |
+- **When to alert** — tick the events you want and tune the thresholds: certificate expiry warning (days), 5xx and denied spikes (% of requests within the spike window, with a minimum number of requests), minutes offline before alerting, how long drift must last, and **Repeat the same alert after** (cool-down, so a flapping backend doesn't flood you; recoveries are always sent).
+- **📨 Send test** saves and sends a test alert to every enabled channel. Passwords are stored in `data/alerts.json` and never shown again.
+
+Spike alerts need Connections enabled; backend alerts need health checks; VIP alerts need a VIP set.
+
+### Users and roles
+
+**⚙ Settings → Users** (admin) → **＋ Add user**. Roles: **viewer** (read-only, private keys hidden), **operator** (edit, apply, rollback, sync), **admin** (also users, sign-in, alerts, branding, enrolment). Local passwords must be 10+ characters; users change their own under **My account**.
+
+The built-in `admin` account always works with `ADMIN_PASSWORD` from `.env` — keep it as a break-glass account and use named or directory accounts day to day. After 10 failed sign-ins an IP is locked out for 15 minutes (a service restart clears it). **⚙ Settings → Audit log** lists every sign-in and change.
+
+### Directory sign-in — LDAP / Active Directory
+
+**⚙ Settings → Sign-in** (admin). Turn **LDAP / Active Directory** on to show its settings.
+
+1. **Server URL** — `ldaps://dc01.example.com:636` (recommended) or `ldap://…:389` with **StartTLS**. Plain `ldap://` without StartTLS sends passwords in clear text and is warned about.
+2. **Certificate** — keep **Verify the server certificate** on. For an internal CA (e.g. AD CS), paste the root CA PEM into **CA certificate**. If the URL uses an IP address, put the name the DC's certificate is issued to (e.g. `dc01.example.com`) in **Certificate name**.
+3. **Directory type** — *Active Directory* fills the AD user filter; *OpenLDAP / FreeIPA* uses `uid`.
+4. **How users are found**:
+   - *Service account searches* (recommended) — create a plain domain user (e.g. `svc-nginx-manager`, no admin rights, password never expires) and enter it as `svc-nginx-manager@example.com` or its DN, with its password. **Base DN** is where users are searched, e.g. `DC=example,DC=com`.
+   - *Bind directly as the user* — no service account; **Bind as** is a template such as `{{username}}@example.com`.
+5. **User filter** — the AD default `(|(sAMAccountName={{username}})(userPrincipalName={{upn}}))` lets people sign in as `user`, `DOMAIN\user` or `user@domain`.
+6. **Groups → role** — create security groups (e.g. `nginx-manager-admins`, `-operators`, `-viewers`), add people, and paste each group's full DN (e.g. `CN=nginx-manager-admins,OU=Groups,DC=example,DC=com`). Turn on **Include nested groups** for AD. **Users in none of these groups** is normally *refuse sign-in*.
+7. **💾 Save**, then **Test a sign-in** — it shows each step (connect, bind, search, groups, role) without creating a session.
+
+The role is re-read from the directory at every sign-in. A local user with the same name takes precedence over the directory.
+
+### Directory sign-in — RADIUS
+
+Turn **RADIUS** on in **⚙ Settings → Sign-in**:
+
+1. **Server** / **Port** (1812) / **Shared secret** — add the manager as a RADIUS client on the server (NPS: *RADIUS Clients*; FreeRADIUS: `clients.conf`) with the same secret.
+2. **Role comes from the reply attribute** `Class` or `Filter-Id`. On the RADIUS server, return a value per role — e.g. an NPS network policy per AD group with *Settings → RADIUS Attributes → Standard → Class* = `nginx-admin` — and enter the same values under **value for admin / operator / viewer**.
+3. Authentication is PAP with Message-Authenticator; push-style MFA proxies that accept PAP work, challenge/response prompts don't.
+
+With both providers on, **Try in this order** chooses which is asked first.
+
+### Managed certificates
+
+**Certificates tab → ＋ Request Certificate**:
+
+1. **Name**, **domains** (wildcards allowed, e.g. `example.com *.example.com`) and an optional contact email.
+2. **CA** — Let's Encrypt (default) or another ACME CA. ZeroSSL, Google Trust Services, DigiCert and Sectigo need **EAB** credentials (key ID + HMAC from your CA account; DigiCert/Sectigo also the ACME directory URL). Or choose **AWS Certificate Manager** for an exportable ACM certificate (IAM: `acm:DescribeCertificate`, `acm:ExportCertificate`).
+3. **DNS validation** (DNS-01, works for wildcards and private servers):
+   - *Cloudflare* — an API token with **Zone → DNS → Edit** on the zone.
+   - *Route 53* — access key with `route53:ListHostedZones`, `route53:GetChange`, `route53:ChangeResourceRecordSets` (or an instance role).
+   - *Custom hook scripts* — absolute paths to an auth and a cleanup script on the manager; certbot runs them with `CERTBOT_DOMAIN` and `CERTBOT_VALIDATION`, and they must create/remove the TXT record `_acme-challenge.$CERTBOT_DOMAIN`.
+4. **Deploy to** — the servers (usually the whole group) — and the paths to write (default `/etc/nginx/ssl/<name>/fullchain.pem` + `privkey.pem`); **Renew when fewer than (days) left** defaults to 30.
+5. **🔄 Save & Issue**, then **🔀 Use for sites…** to point existing `ssl_certificate` lines at it (staged, then Apply).
+
+### Reverse proxies and per-site protection
+
+**Visual Builder → 🔀 Add Reverse Proxy**: name, domain(s), backend(s), optional backend path, certificate, and options (HSTS, WebSockets, upload size, read timeout). Under **Protection**:
+
+- **Rate limit** — rate (`10r/s` or `300r/m`) and burst, per client IP. Excess requests get 429. Zones live in `conf.d/00-nginx-manager-limits.conf`.
+- **Connection limit** — max simultaneous connections per client IP.
+- **SSO** — pick Authelia, Authentik or oauth2-proxy (or fill in your own): the **Check URL** nginx calls for every request (`auth_request`) and the **Sign-in page** users are sent to. `Remote-User`, `Remote-Groups`, `Remote-Email` and `Remote-Name` are passed to the backend.
+
+### Unknown hosts (catch-all)
+
+**Visual Builder → Unknown hosts → Set up**:
+
+- **Drop** (recommended) — HTTP gets `444` (connection closed), HTTPS refuses the TLS handshake (`ssl_reject_handshake`, no certificate needed or revealed).
+- **Return a status code** — e.g. 404.
+- **Redirect to a URL** — 301/302/307/308, optionally keeping the path.
+
+For a status or redirect over HTTPS, choose a certificate to answer with; otherwise HTTPS listeners still reject the handshake. The file `conf.d/00-nginx-manager-default.conf` covers every address:port your name-based sites listen on and is updated automatically as sites change; a port that already has a `default_server` elsewhere is reported as a conflict and left alone. Do it on each group member (or **Apply → Whole group**).
+
+### Group sync and drift
+
+Drift is checked every minute; a group with differences shows a badge. Right-click the group → **🔁 Compare & sync…** to see each differing file, pick the source server, and **Copy & apply**. Under **Ignore files that are meant to differ**, list glob patterns (one per line, e.g. `/etc/nginx/conf.d/local-*.conf`) for per-server files.
+
+### Forward proxies
+
+**Visual Builder → 🧭 Add Forward Proxy** (only on servers running nginx ≥ 1.31.0): listen address/port, allowed client networks and/or proxy logins (at least one is required — open proxies are refused), and optionally allowed destination hosts/ports. Clients use it as an HTTPS proxy (`CONNECT`).
+
+### RTSP streams
+
+**Visual Builder → 📹 Add RTSP Stream**: name, listen port (e.g. 8554), the camera or RTSP server, optional fallback servers (e.g. the NVR), and the client networks allowed (required). Clients must use RTSP over TCP. The first stream adds a `stream {}` block to `nginx.conf`.
+
+### CVE detection
+
+Nothing to configure — the **CVEs** tab refreshes advisories daily (needs outbound HTTPS to nginx.org and osv.dev); **🔄 Check now** refreshes immediately. Enable the *New CVE* alert to be told.
+
+### Branding
+
+**🎨 Branding** (admin, top bar): logo (PNG/JPEG/WebP/GIF up to 512 KB; SVG refused), app name and login-page text. Stored in `data/`, so upgrades keep it.
+
+### Serving the UI over HTTPS
+
+Put the UI behind a reverse proxy (it can be one of your managed nginx servers) and set `COOKIE_SECURE=true` and `TRUST_PROXY=1` in `.env`. Proxy WebSockets (`/socket.io/`) too.
 
 ## Notes
 
-- **Allowed directories** — the agent can only read/write files under its `allowed_directories`. The generated config allows `/etc/nginx`, `/etc/letsencrypt` and `/etc/ssl/nginx` (plus nginx's runtime/log dirs). Upload certificates to a path under one of those, e.g. `/etc/nginx/ssl/`.
+- **Allowed directories** — the agent can only read/write files under its `allowed_directories`: `/etc/nginx`, `/etc/letsencrypt`, `/etc/ssl/nginx` (plus nginx's runtime/log dirs). Upload certificates under one of those, e.g. `/etc/nginx/ssl/`.
+- **Applying** writes the files, runs `nginx -t` and does a graceful reload (no dropped connections). The agent then watches the error log for ~10 s before reporting success, and rolls back if anything fails.
+- **Reverse proxies are edited in place** — a site is the `# ===` header comment plus its `upstream`, HTTP→HTTPS redirect and HTTPS `server` blocks, grouped by `server_name`. The popup only rewrites the directives its fields own; comments and everything else stay byte-for-byte. Sites whose `proxy_pass` uses variables, and non-proxy server blocks, are read-only cards that open the file.
+- **Files the agent doesn't report back** (private keys, htpasswd files, the health helper's `helper.json`) are remembered by the manager and included in every later apply — otherwise the agent would delete them.
+- **Managed files** are named `00-nginx-manager-*.conf` in `conf.d/` and are excluded from the Builder's site list. Edit them through their feature, not by hand.
+- **Forward proxies** use `ngx_http_tunnel_module` (nginx 1.31.0+, mainline). Proxy logins are bcrypt hashes in `/etc/nginx/forward-proxy/<name>.htpasswd`. Destinations are matched by name; IP-literal destinations are blocked by default.
+- **Managed certificates** are issued once, on the manager, so an HA pair always serves the same certificate. A deployment applies only the certificate files, never unrelated pending edits. Servers that were offline get the new certificate when they reconnect. Secrets (DNS tokens, EAB HMAC, AWS keys) live only in `data/cert-secrets.json` (mode 600).
+- **SELinux** — the only change needed is the status-port label done by the helper script; nginx's syslog to the manager is plain UDP and needs no boolean. Your own `proxy_pass` targets need `httpd_can_network_connect` as usual.
+- **Data and backups** — everything lives in `data/` (mode 700): servers, synced file contents (**including TLS private keys**), history, users, sign-in and alert settings (with secrets), certbot accounts and certificates, and the gRPC CA. Back it up and protect the backups; losing `data/tls/` means re-enrolling every agent.
 - **Upgrading from v1 (SSH)** — on first start, stored SSH passwords are removed from `data/agents.json`. Open each server, click **🔑 Agent Setup → New Token**, and run the setup on that server.
-- **Reverse proxies are edited in place** — a site is the `# ===` header comment plus its `upstream` (if any), HTTP→HTTPS redirect and HTTPS `server` blocks, grouped by `server_name`. The popup only rewrites the directives its fields own (`server_name`, upstream `server` lines, `proxy_pass`, cert paths, timeouts, body size, HSTS, WebSocket headers); comments and everything else — keepalive, `proxy_next_upstream`, … — stay byte-for-byte. New proxies are appended to `conf.d/reverse-proxies.conf` in the same layout. Sites whose `proxy_pass` uses variables, and non-proxy server blocks, are read-only cards that open the file.
-- **Applying** writes the files, runs `nginx -t` and does a graceful `nginx -s reload` (no dropped connections). The agent then watches the error log for ~10 s before reporting success, and rolls back if anything fails. **Save & Apply** in the popup does both in one click.
-- **Static sites and redirects** made in the builder own their whole generated `.conf` file and are edited in the form.
-- **Forward proxies** use `ngx_http_tunnel_module`, added in **nginx 1.31.0** (built by default unless nginx was configured `--without-http_tunnel_module`). The section is enabled per server only when its agent reports nginx ≥ 1.31.0 — nginx.org's *stable* packages (1.30.x) don't have it yet; the *mainline* repo does.
-  - Clients send `CONNECT host:443` and nginx tunnels the TLS connection. Plain `http://` through the proxy isn't supported by the module (it answers 405/403).
-  - Each proxy is a header comment, two `map`s (allowed destination ports and hosts — `*.example.com` wildcards; IP-literal destinations blocked by default so a name allowlist can't be bypassed) and a `server` with `allow`/`deny` for client networks, optional proxy login, and `tunnel_pass`.
-  - Proxy login uses `auth_basic`, which answers CONNECT requests with `407 Proxy-Authenticate`. Users are kept as **bcrypt hashes** in `/etc/nginx/forward-proxy/<name>.htpasswd` (mode 640, readable by the nginx workers through the `nginx-agent` group); plaintext passwords are never stored. Leaving a password blank on edit keeps it.
-  - An open proxy is refused: you must restrict client networks, require a login, or both. Destinations are matched by name — with "any host", allowed clients can also reach internal services by DNS name.
-  - Editing regenerates the proxy's blocks but keeps any directives you added to its `server` block by hand, and a customised `access_log` path.
-- **Managed certificates** are issued once, on the manager — so an HA pair always serves the same certificate — and pushed to each target server as two files (default `/etc/nginx/ssl/<name>/fullchain.pem` + `privkey.pem`; the key is mode 600). A deployment applies only those two files, never unrelated pending edits, and the agent still runs `nginx -t`, reloads and rolls back on failure. Renewal is checked every 10 minutes (default: renew when 30 days are left); servers that were offline get the new certificate when they reconnect.
-  - **Validation is DNS-01** (works for wildcards and for servers not reachable from the internet): Cloudflare (API token with Zone → DNS → Edit), Route 53, or custom hook scripts for any other DNS host.
-  - **Other CAs**: ZeroSSL, Google Trust Services, DigiCert and Sectigo use ACME with External Account Binding — paste the EAB key ID and HMAC from your CA account (DigiCert/Sectigo: also the account's ACME directory URL).
-  - **AWS Certificate Manager**: the certificate must be requested with export enabled (or come from AWS Private CA). AWS renews it; nginx-manager checks the serial every 6 hours and re-exports + redeploys when it changes. IAM: `acm:DescribeCertificate`, `acm:ExportCertificate`.
-  - **Use for sites…** switches every `ssl_certificate`/`ssl_certificate_key` that points at an old certificate to the managed one (staged for review, then Apply).
-  - Secrets (DNS tokens, EAB HMAC, AWS keys) live only in `data/cert-secrets.json` (mode 600) and are never returned by the API. ACME account keys and issued certificates live in `data/certbot/`.
-- **Keys the agent doesn't report** (NGINX Agent never uploads private keys) are remembered by the manager and included in every later apply — otherwise the agent would delete them.
-- **Data** lives in `./data/` (git-ignored, mode 700): server list, synced file contents, uploaded-cert labels, builder site definitions, and the gRPC TLS material. Synced files can include TLS private keys referenced by nginx — protect backups accordingly.
 - `proto/` contains the NGINX Agent `mpi.v1` protobuf definitions (Apache-2.0, from [nginx/agent](https://github.com/nginx/agent)) with `buf.validate` annotations removed.
+
+## Limitations
+
+- One manager instance; state is JSON files in `data/`, and sessions are in memory (a restart signs everyone out).
+- No MFA for local accounts and no API tokens for automation yet.
+- Open-source nginx only (not NGINX Plus' API).
+- Log/health/VIP reports are plain, unauthenticated UDP syslog identified by source IP — keep them on a trusted network and avoid NAT between the servers and the manager.
+- Tested on Debian 13 and Rocky Linux 9 nginx servers; the SELinux step has not been tested on an enforcing host.
 
 ## Development
 
