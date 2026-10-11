@@ -6,7 +6,7 @@ Built for ConnopNetworking homelab infrastructure; usable anywhere you run open-
 
 - [Features](#features)
 - [Architecture](#architecture)
-- [Installation](#installation) — manager, recommended spec, adding nginx servers, network ports, firewall rules
+- [Installation](#installation) — manager, recommended spec, data retention, adding nginx servers, network ports, firewall rules
 - [Configuration (.env)](#configuration-env)
 - [Setup guides](#setup-guides) — how to configure each feature
 - [Notes](#notes) · [Limitations](#limitations) · [Development](#development)
@@ -116,11 +116,31 @@ The manager is light: one Node.js process plus certbot when a certificate renews
 
 - **An unprivileged LXC container is fine** (that's what it's developed on) — no nesting, no special features, no host mounts. A small VM works equally well.
 - The headroom is for `npm ci` during install/upgrade (a few hundred MB briefly), certbot runs (Python, ~100 MB for a few seconds), and the in-memory request log (up to 2 000 recent requests per server, ~1 MB each).
-- **Disk growth** is bounded: per server, up to 200 config-history snapshots (content-deduplicated), usage data for 30 days (a few MB), keepalived log history and the audit log (rotated at 5 MB). Budget roughly **50–100 MB per server** worst case; most of the 8 GB is the OS. Back up `data/`.
+- **Disk growth** is small and almost entirely capped — see [Data retention](#data-retention). Budget roughly **50–100 MB per server** worst case; most of the 8 GB is the OS. Back up `data/`.
 - Give it a **static IP** (or stable DNS name) — the agents' TLS certificate and setup scripts point at it — and put it where the servers can reach it ([firewall rules](#firewall-rules-manager-in-a-different-network--vlan)). It doesn't need to be close to the servers; latency doesn't matter.
 - One instance per estate; there's no clustering. If it is down, nginx keeps serving with its last config — you only lose management, logs and alerts until it's back.
 
 **Overhead on each nginx server** (measured): `nginx-agent` ~70 MB RAM, health helper ~13 MB, keepalived forwarder ~3 MB, all near-zero CPU. Plan about **100 MB of RAM on top of nginx itself**; the pair here runs comfortably in 2 vCPU / 1 GB LXC containers.
+
+### Data retention
+
+nginx-manager is a management and live-monitoring tool, **not a log archive**. Each kind of data has a fixed limit and is removed automatically — nothing is kept indefinitely, and no 90-day history is kept:
+
+| Data | Where | Kept for | Removed |
+|---|---|---|---|
+| Request log (Log → Connections) | manager memory only | last 2 000 requests per server; cleared on restart | automatically, oldest first |
+| Usage dashboard | `data/usage/` | per-minute 48 h, hourly **30 days** | automatically, by age |
+| Health-check history | manager memory | 24 h | automatically |
+| Keepalived log | `data/logs/` | last **500 lines** per server | automatically, by count |
+| Audit log | `data/audit.log` (+ `.1`) | up to 5 MB, then one previous 5 MB file | automatically, by size (not age) |
+| Alert history | `data/alert-history.json` | last 500 alerts | automatically, by count |
+| Config history | `data/history/` | last 200 snapshots per server | automatically, by count |
+| Stored config file contents | `data/blobs/` | every distinct file version ever seen | **not pruned** — grows by one copy of a changed file per change (usually a few KB) |
+| nginx's own access/error logs | each nginx server, `/var/log/nginx` | distro logrotate default (nginx.org package: daily, 52 kept, compressed) | by logrotate on the server |
+
+In practice `data/` grows by a few tens of MB over months. On a homelab LB pair the local nginx logs are ~1 MB/day uncompressed (~50 KB compressed).
+
+**Need longer retention** (e.g. 90 days for compliance)? Keep it at the source rather than in the manager: raise `rotate` in `/etc/logrotate.d/nginx` on each server (`rotate 92` with `daily` = ~3 months), or ship nginx and keepalived logs to a log platform (Loki, Graylog, Elastic, a SIEM) alongside nginx-manager. Export the audit log from `data/audit.log` (JSON lines) if you need it beyond its 10 MB window.
 
 ### Adding an nginx server
 
